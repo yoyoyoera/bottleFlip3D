@@ -48,6 +48,9 @@ button.icon { padding: 2px 8px; }
 .toast.bad { color: var(--bad); }
 .toast.gold { color: #ffd36e; }
 .last { position: fixed; top: calc(22% + 36px); left: 50%; transform: translateX(-50%); font-size: 14px; color: var(--text); opacity: 0.85; text-shadow: 0 1px 6px rgba(0,0,0,0.7); white-space: nowrap; }
+.angle-box { position: fixed; right: 16px; bottom: 250px; background: var(--panel); border-radius: 10px; padding: 6px 10px; text-align: center; min-width: 56px; }
+.angle-box small { display: block; color: var(--muted); font-size: 11px; }
+.angle-box b { font-size: 20px; }
 .meter { position: fixed; right: 24px; bottom: 60px; width: 16px; height: 180px; background: rgba(0,0,0,0.35); border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.25); }
 #meterFill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(to top, #4fa8ff, #ffd36e, #ff6b6b); }
 #meterMark { position: absolute; left: -4px; right: -4px; height: 2px; background: #fff; bottom: 0; opacity: 0; }

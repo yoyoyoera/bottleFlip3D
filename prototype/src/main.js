@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BottleSim, DT } from './physics.js';
-import { BOTTLES, FLUIDS, MAPS, THROW } from './config.js';
+import { BOTTLES, FLUIDS, MAPS, TABLE, THROW } from './config.js';
 import { BottleView, LABELS } from './bottleView.js';
 import { buildWorld } from './world.js';
 
@@ -24,10 +24,11 @@ const save = (data) => {
 const saved = load();
 const opts = { map: 'forest', bottle: 'standard', fluid: 'water', fill: 0.3, ...saved.opts };
 const look = { fluidColor: FLUIDS[opts.fluid].color, capColor: '#e84a5f', label: 'stripe', labelColor: '#2d6cdf', ...saved.look };
-const tuning = { refSpeed: THROW.refSpeed, spinBase: THROW.spinBase, spinRatio: THROW.spinRatio, ...saved.tuning };
+const tuning = { dragRef: THROW.dragRef, spinBase: THROW.spinBase, spinRatio: THROW.spinRatio, ...saved.tuning };
+const aim = { angle: saved.angle ?? THROW.angle };
 const stats = { ok: 0, all: 0, streak: 0, best: saved.best || 0 };
 const prefs = { showMeter: true, slowmo: false, ...saved.prefs };
-const persist = () => save({ opts, look, tuning, best: stats.best, prefs });
+const persist = () => save({ opts, look, tuning, best: stats.best, prefs, angle: aim.angle });
 
 // ---------- 렌더러 ----------
 const canvas = document.getElementById('view');
@@ -39,7 +40,7 @@ renderer.localClippingEnabled = true;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 60);
+const camera = new THREE.PerspectiveCamera(62, 1, 0.01, 60);
 const resize = () => {
   renderer.setSize(innerWidth, innerHeight, false);
   camera.aspect = innerWidth / innerHeight;
@@ -85,7 +86,7 @@ function scheduleGuide() {
     const t0 = performance.now();
     while (p <= THROW.maxPower + 1e-9 && performance.now() - t0 < 12) {
       probe.reset();
-      probe.throw({ power: p });
+      probe.throw({ power: p, angle: aim.angle });
       const r = probe.runToEnd();
       results.push({ p, ok: r && (r.outcome === 'upright' || r.outcome === 'cap') });
       p += step;
@@ -169,7 +170,7 @@ $('labelColor').oninput = (e) => { look.labelColor = e.target.value; view.build(
 
 const bindRange = (id, key, fmt, rebuildSim) => {
   const el = $(id);
-  const out = $(`${id === 'refSpeed' ? 'ref' : id}Val`);
+  const out = $(`${id}Val`);
   const sync = () => { el.value = tuning[key]; out.textContent = fmt(tuning[key]); };
   sync();
   el.oninput = () => { tuning[key] = +el.value; out.textContent = fmt(tuning[key]); persist(); };
@@ -177,7 +178,7 @@ const bindRange = (id, key, fmt, rebuildSim) => {
   return sync;
 };
 const syncs = [
-  bindRange('refSpeed', 'refSpeed', (v) => `${v.toFixed(1)} 화면/초 = 100%`, false),
+  bindRange('dragRef', 'dragRef', (v) => `화면 높이의 ${Math.round(v * 100)}% = 파워 100%`, false),
   bindRange('spinBase', 'spinBase', (v) => `${v} rad/s`, true),
   bindRange('spinRatio', 'spinRatio', (v) => `× ${v}`, true),
 ];
@@ -186,7 +187,7 @@ $('slowmo').checked = prefs.slowmo;
 $('showMeter').onchange = (e) => { prefs.showMeter = e.target.checked; persist(); };
 $('slowmo').onchange = (e) => { prefs.slowmo = e.target.checked; persist(); };
 $('resetTuning').onclick = () => {
-  Object.assign(tuning, { refSpeed: THROW.refSpeed, spinBase: THROW.spinBase, spinRatio: THROW.spinRatio });
+  Object.assign(tuning, { dragRef: THROW.dragRef, spinBase: THROW.spinBase, spinRatio: THROW.spinRatio });
   syncs.forEach((s) => s());
   rebuild();
 };
@@ -228,73 +229,106 @@ const updateStats = () => {
 };
 updateStats();
 
-// ---------- 입력: 누른 채 위로 휙 → 놓기 ----------
+// ---------- 입력 ----------
+// 마우스 이동: 병이 커서를 따라 테이블 위를 움직인다 (손에 든 상태)
+// 스크롤: 던지는 각도 (앞으로 기울일수록 멀리 가지만 착지가 어려워진다)
+// 누른 채 위로 드래그: 끈 거리만큼 힘이 찬다 → 놓으면 던지기
 let drag = null;
 let charge = null;
 let lastPower = null;
+const hand = { x: 0, z: THROW.startZ }; // 병을 쥔 손의 테이블 위 위치
+const HAND_X = TABLE.halfX - 0.1;
+const HAND_Z = [0.05, TABLE.halfZ - 0.06];
+
+const raycaster = new THREE.Raycaster();
+const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -TABLE.y);
+// 커서가 가리키는 테이블 위 지점 → 손 위치
+function aimHand(e) {
+  const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.ray.intersectPlane(tablePlane, new THREE.Vector3());
+  if (!hit) return;
+  hand.x = Math.max(-HAND_X, Math.min(HAND_X, hit.x));
+  hand.z = Math.max(HAND_Z[0], Math.min(HAND_Z[1], hit.z));
+}
 
 function resetThrow() {
   drag = null;
   charge = null;
   sim.reset();
+  sim.setHold(hand.x, hand.z, 0);
   resultShownAt = 0;
   meterMark.style.opacity = 0;
   setMeter(0);
 }
 
-function doThrow(power, lateral) {
+function doThrow(power, lateral = 0) {
   if (sim.state !== 'ready') return;
   lastPower = power;
-  sim.throw({ power, lateral });
+  sim.throw({ power, lateral, angle: aim.angle });
   setMeter(power, power);
   $('last').textContent = '';
 }
 
-canvas.addEventListener('pointerdown', (e) => {
+const dragPower = (d, y) => Math.max(0, (d.startY - y) / innerHeight / tuning.dragRef);
+const DRAG_LIFT = 0.05; // 힘을 모을수록 병을 이만큼까지 들어 올린다 (m)
+
+canvas.addEventListener('pointermove', (e) => {
   if (mode !== 'play' || sim.state !== 'ready') return;
+  if (!drag) {
+    aimHand(e);
+    sim.setHold(hand.x, hand.z, 0);
+    return;
+  }
+  // 힘 모으는 중: 손 위치는 고정, 끈 만큼 병이 들리고 미터가 찬다
+  drag.power = Math.min(THROW.maxPower, dragPower(drag, e.clientY));
+  sim.setHold(hand.x, hand.z, (drag.power / THROW.maxPower) * DRAG_LIFT);
+  setMeter(drag.power);
+});
+canvas.addEventListener('pointerdown', (e) => {
+  if (mode !== 'play' || sim.state !== 'ready' || e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
-  drag = { startY: e.clientY, startX: e.clientX, samples: [{ t: performance.now(), x: e.clientX, y: e.clientY }] };
+  aimHand(e);
+  drag = { startY: e.clientY, power: 0 };
   meterMark.style.opacity = 0;
 });
-canvas.addEventListener('pointermove', (e) => {
+const endDrag = () => {
   if (!drag) return;
-  const now = performance.now();
-  drag.samples.push({ t: now, x: e.clientX, y: e.clientY });
-  while (drag.samples.length > 2 && now - drag.samples[0].t > 120) drag.samples.shift();
-  // 손에 든 병을 살짝 들어올림 → 물이 출렁인다
-  const up = Math.max(0, drag.startY - e.clientY) / innerHeight;
-  const side = (e.clientX - drag.startX) / innerHeight;
-  sim.setHold(Math.min(0.05, up * 0.12), Math.max(-0.05, Math.min(0.05, side * 0.08)));
-  if (prefs.showMeter) setMeter(flickPower(drag).power);
-});
-const flickPower = (d) => {
-  const s = d.samples;
-  const now = performance.now();
-  // 최근 80ms 구간의 속도
-  let i = s.length - 1;
-  while (i > 0 && now - s[i - 1].t < 80) i--;
-  const a = s[Math.max(0, i - 1)];
-  const b = s[s.length - 1];
-  const dt = Math.max(0.008, (b.t - a.t) / 1000);
-  const vy = (a.y - b.y) / innerHeight / dt; // 화면 높이/초, 위쪽 +
-  const vx = (b.x - a.x) / innerHeight / dt;
-  return { power: vy / tuning.refSpeed, lateral: Math.max(-1, Math.min(1, vx / tuning.refSpeed)), vy };
-};
-const endDrag = (e) => {
-  if (!drag) return;
-  drag.samples.push({ t: performance.now(), x: e.clientX, y: e.clientY });
-  const f = flickPower(drag);
+  const p = drag.power;
   drag = null;
-  if (f.vy < 0.35) {
-    // 너무 느리면 던지지 않고 내려놓기
-    sim.setHold(0, 0);
+  if (p < 0.05) {
+    // 거의 안 끌었으면 던지지 않고 내려놓기
+    sim.setHold(hand.x, hand.z, 0);
     setMeter(0);
     return;
   }
-  doThrow(f.power, f.lateral);
+  doThrow(p);
 };
 canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', () => { drag = null; sim?.setHold(0, 0); });
+const cancelDrag = () => {
+  if (!drag) return;
+  drag = null;
+  sim.setHold(hand.x, hand.z, 0);
+  setMeter(0);
+};
+canvas.addEventListener('pointercancel', cancelDrag);
+canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); cancelDrag(); });
+
+let guideTimer = 0;
+const setAngle = (deg) => {
+  const a = Math.max(THROW.minAngle, Math.min(THROW.maxAngle, deg));
+  if (a === aim.angle) return;
+  aim.angle = a;
+  $('angle').textContent = `${a}°`;
+  clearTimeout(guideTimer);
+  guideTimer = setTimeout(() => { scheduleGuide(); persist(); }, 250);
+};
+$('angle').textContent = `${aim.angle}°`;
+canvas.addEventListener('wheel', (e) => {
+  if (mode !== 'play') return;
+  e.preventDefault();
+  setAngle(aim.angle + (e.deltaY < 0 ? 1 : -1));
+}, { passive: false });
 
 addEventListener('keydown', (e) => {
   if (mode !== 'play') return;
@@ -304,13 +338,15 @@ addEventListener('keydown', (e) => {
     e.preventDefault();
   }
   if (e.code === 'KeyR') resetThrow();
+  if (e.code === 'Escape') cancelDrag();
+  if (e.code === 'ArrowUp') setAngle(aim.angle + 1);
+  if (e.code === 'ArrowDown') setAngle(aim.angle - 1);
 });
 addEventListener('keyup', (e) => {
   if (e.code === 'Space' && charge) {
     const p = chargePower();
     charge = null;
-    sim.setHold(0, 0);
-    doThrow(p, 0);
+    doThrow(p);
   }
 });
 // 스페이스 충전: 0 → 최대 → 0 을 2.4초 주기로 왕복
@@ -340,11 +376,52 @@ function onResult(r) {
 }
 
 // ---------- 카메라 ----------
-// 3/4 시점: 병이 뒤집히는 궤적이 옆에서 보이도록
-const camPlay = { pos: new THREE.Vector3(0.62, 1.12, 0.92), look: new THREE.Vector3(0, 0.9, 0.08) };
+// 1인칭: 내 자리(테이블 앞쪽 의자)에 앉은 눈높이
+const camPlay = { pos: new THREE.Vector3(0, 1.2, 0.9), look: new THREE.Vector3(0, 0.8, 0.0) };
 const camMenu = { pos: new THREE.Vector3(-0.2, 0.9, 0.68), look: new THREE.Vector3(-0.17, 0.85, 0.3) };
 const camPos = camMenu.pos.clone();
 const camLook = camMenu.look.clone();
+
+// ---------- 조준 궤적 (각도 + 현재 힘으로 그린 포물선) ----------
+const ARC_N = 40;
+const arcGeo = new THREE.BufferGeometry();
+arcGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ARC_N * 3), 3));
+const arc = new THREE.Line(arcGeo, new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.02, gapSize: 0.015, transparent: true, opacity: 0.8, depthTest: false }));
+arc.renderOrder = 10;
+arc.frustumCulled = false;
+scene.add(arc);
+// 착지 예상 지점 (1인칭에서는 궤적이 겹쳐 보이므로 거리감을 이걸로 준다)
+const landMark = new THREE.Mesh(
+  new THREE.RingGeometry(0.03, 0.042, 32),
+  new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, depthTest: false, side: THREE.DoubleSide }),
+);
+landMark.rotation.x = -Math.PI / 2;
+landMark.renderOrder = 10;
+scene.add(landMark);
+function updateArc() {
+  const show = mode === 'play' && sim.state === 'ready';
+  arc.visible = show;
+  landMark.visible = show;
+  if (!show) return;
+  // 힘을 모으는 중이면 그 힘, 아니면 가이드 기준 힘(1.0)으로 흐리게
+  const power = drag ? drag.power : charge ? chargePower() : 1.0;
+  arc.material.opacity = drag || charge ? 0.9 : 0.35;
+  const vUp = THROW.minUp + THROW.upPerPower * power;
+  const vz = -vUp * Math.tan((aim.angle * Math.PI) / 180);
+  const g = MAPS[opts.map].gravity;
+  const T = (2 * vUp) / g;
+  const pos = arcGeo.attributes.position;
+  const y0 = TABLE.y + 0.005;
+  for (let i = 0; i < ARC_N; i++) {
+    const t = (i / (ARC_N - 1)) * T;
+    pos.setXYZ(i, hand.x, y0 + vUp * t - 0.5 * g * t * t, hand.z + vz * t);
+  }
+  pos.needsUpdate = true;
+  landMark.position.set(hand.x, TABLE.y + 0.002, hand.z + vz * T);
+  landMark.material.opacity = arc.material.opacity;
+  arcGeo.computeBoundingSphere();
+  arc.computeLineDistances();
+}
 
 // ---------- 루프 ----------
 rebuild();
@@ -360,7 +437,7 @@ function frame(now) {
   if (charge) {
     const p = chargePower();
     setMeter(p);
-    sim.setHold(Math.min(0.06, p * 0.03), 0);
+    sim.setHold(hand.x, hand.z, (p / THROW.maxPower) * DRAG_LIFT);
   }
   if (!prefs.showMeter && !charge) meter.style.opacity = 0;
   else meter.style.opacity = 1;
@@ -379,14 +456,15 @@ function frame(now) {
   }
 
   view.update(real);
+  updateArc();
 
   // 카메라 (기차는 흔들림 반영)
   const target = mode === 'menu' ? camMenu : camPlay;
   const k = 1 - Math.exp(-real * 4);
-  // 병이 높이 뜨면 카메라가 살짝 따라 올라간다
-  const lift = mode === 'play' ? Math.max(0, sim.x[1] - 0.95) * 0.7 : 0;
-  camPos.lerp(target.pos.clone().setY(target.pos.y + lift * 0.6), k);
-  camLook.lerp(target.look.clone().setY(target.look.y + lift), k);
+  // 병이 높이 뜨면 고개를 들어 따라본다 (몸은 그대로)
+  const lift = mode === 'play' ? Math.max(0, sim.x[1] - 0.95) : 0;
+  camPos.lerp(target.pos, k);
+  camLook.lerp(target.look.clone().setY(target.look.y + lift * 1.1), k);
   const shake = MAPS[opts.map].shake ? sim.gravityVec(sim.time) : null;
   camera.position.copy(camPos);
   if (shake) camera.position.x += shake[0] * 0.004;
@@ -398,4 +476,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // 디버그/자동 테스트용
-window.__bottleflip = { get sim() { return sim; }, doThrow, resetThrow, setMode, opts, get guide() { return guide; } };
+window.__bottleflip = { get sim() { return sim; }, doThrow, resetThrow, setMode, setAngle, opts, hand, get guide() { return guide; } };

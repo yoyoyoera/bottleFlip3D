@@ -36,13 +36,15 @@ export const MAPS = {
 
 export const TABLE = { y: 0.75, halfX: 0.7, halfZ: 0.5 };
 
-// 던지기 매핑: 마우스 플릭 속도 → 발사 속도/회전.
+// 던지기 매핑: 드래그 거리 → 발사 속도/회전, 스크롤 → 각도.
 export const THROW = {
-  refSpeed: 2.4, // 이 플릭 속도(화면 높이/초)가 power 1.0
+  dragRef: 0.3, // 위로 이만큼(화면 높이 비율) 끌면 power 1.0
   maxPower: 1.5,
   minUp: 1.2, // power 0 일 때 위 속도
   upPerPower: 1.8, // power 1 당 추가 위 속도
-  forwardRatio: 0.1, // 앞으로 나가는 속도 = 위 속도 * 비율
+  angle: 6, // 기본 던지기 각도(도). 앞으로 나가는 속도 = 위 속도 * tan(각도)
+  minAngle: 0,
+  maxAngle: 20, // 이보다 크면 테이블 밖으로 나간다
   lateralPerPower: 0.5, // 좌우 조준
   spinBase: 17, // 회전(rad/s) = spinBase + 위 속도 * spinRatio
   spinRatio: 1.5,

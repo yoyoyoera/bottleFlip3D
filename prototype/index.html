@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bottle Flip 3D — 던지기 프로토타입</title>
+    <title>Bottle Flip 3D</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -47,7 +47,7 @@
         <b>설정 · 튜닝</b>
         <button id="settingsClose" class="icon">✕</button>
       </div>
-      <label>플릭 감도 <span id="refVal"></span><input id="refSpeed" type="range" min="1.2" max="4" step="0.1" /></label>
+      <label>드래그 감도 <span id="dragRefVal"></span><input id="dragRef" type="range" min="0.12" max="0.5" step="0.01" /></label>
       <label>기본 회전 <span id="spinBaseVal"></span><input id="spinBase" type="range" min="8" max="26" step="0.5" /></label>
       <label>속도 비례 회전 <span id="spinRatioVal"></span><input id="spinRatio" type="range" min="0" max="6" step="0.25" /></label>
       <label class="check"><input id="showMeter" type="checkbox" checked /> 파워 미터 표시</label>
@@ -70,7 +70,8 @@
       <div id="meter" class="meter"><div id="meterFill"></div><div id="meterMark"></div></div>
       <div id="toast" class="toast"></div>
       <div id="last" class="last"></div>
-      <div class="hint">병을 누른 채 <b>위로 휙</b> 올렸다 놓기 · <b>Space</b> 길게 눌러 충전 · <b>R</b> 다시</div>
+      <div class="angle-box"><small>각도</small><b id="angle">6°</b><small>스크롤</small></div>
+      <div class="hint">마우스로 병 옮기기 · <b>스크롤</b> 각도 · <b>누른 채 위로 끌어</b> 힘 모으고 놓기 · 우클릭 취소 · <b>R</b> 다시</div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

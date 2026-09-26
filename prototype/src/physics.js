@@ -19,6 +19,7 @@ const MARGIN = 0.004; // 스펙큘러티브 접촉 여유
 const SLOP = 0.0005;
 const BAUMGARTE = 0.25;
 const ABSORB_WINDOW = 0.15; // 착지 흡수가 작동하는 시간 (s)
+const HOLD_MAX_SPEED = 4; // 손에 든 병이 커서를 따라가는 최대 속도 (m/s)
 const LAUNCH_LIFT = 0.05; // 던지는 순간 병 바닥의 최소 높이 (m)
 
 export class BottleSim {
@@ -63,7 +64,9 @@ export class BottleSim {
     this.state = 'ready'; // ready → flying → done
     this.result = null;
     this.held = true;
-    this.holdPos = [0, TABLE.y + 0.0005, this.throwCfg.startZ];
+    // 손 위치(x, z)는 유지하고 테이블 위에 다시 세운다
+    const [hx, , hz] = this.holdPos ?? [0, 0, this.throwCfg.startZ];
+    this.holdPos = [hx, TABLE.y + 0.0005, hz];
     this.holdQuat = [0, 0, 0, 1];
     // 병 위치 = 질량중심 월드 좌표
     this.x = add(this.holdPos, this.com);
@@ -135,19 +138,19 @@ export class BottleSim {
   }
 
   // ---- 입력 ----
-  // 손에 든 상태에서 병을 움직인다 (드래그 중 살짝 들어올리기 → 물이 출렁임)
-  setHold(lift, sway = 0) {
+  // 손에 든 병을 (x, z) 위치, 테이블 위 lift 높이로 옮긴다. 움직이면 물이 출렁인다.
+  setHold(x, z, lift = 0) {
     if (!this.held) return;
-    this.holdPos = [sway, TABLE.y + 0.0005 + lift, this.throwCfg.startZ];
+    this.holdPos = [x, TABLE.y + 0.0005 + lift, z];
   }
 
-  // power: 0 ~ maxPower, lateral: -1 ~ 1
-  throw({ power, lateral = 0 }) {
+  // power: 0 ~ maxPower, lateral: -1 ~ 1, angle: 앞으로 기울여 던지는 각도(도)
+  throw({ power, lateral = 0, angle = this.throwCfg.angle }) {
     if (this.state !== 'ready') return null;
     const c = this.throwCfg;
     power = Math.max(0, Math.min(c.maxPower, power));
     const vUp = c.minUp + c.upPerPower * power;
-    const v = [lateral * c.lateralPerPower, vUp, -vUp * c.forwardRatio];
+    const v = [lateral * c.lateralPerPower, vUp, -vUp * Math.tan((angle * Math.PI) / 180)];
     const w = [-(c.spinBase + c.spinRatio * vUp), 0, 0];
     this.held = false;
     // 손이 병을 들어 올린 상태에서 놓는다 (바닥이 테이블을 긁으며 출발하지 않도록)
@@ -170,7 +173,7 @@ export class BottleSim {
     this.throwTime = this.time;
     this.flightTime = 0;
     this.spinAngle = 0;
-    this.throwInfo = { power, lateral, vUp, spin: -w[0] };
+    this.throwInfo = { power, lateral, angle, vUp, spin: -w[0] };
     return this.throwInfo;
   }
 
@@ -198,9 +201,10 @@ export class BottleSim {
     // 손에 든 상태: 목표 자세로 가는 속도를 직접 설정 (키네마틱)
     if (heldInv) {
       const target = add(this.holdPos, this.com);
-      this.v = scale(sub(target, this.x), 1 / dt);
-      const k = 1 - Math.exp(-dt * 30);
-      this.v = scale(this.v, k);
+      // 커서를 바짝 따라가되, 순간이동으로 물이 폭발하지 않게 속도 상한을 둔다
+      this.v = scale(sub(target, this.x), 0.5 / dt);
+      const sp = len(this.v);
+      if (sp > HOLD_MAX_SPEED) this.v = scale(this.v, HOLD_MAX_SPEED / sp);
       this.w = [0, 0, 0];
       this.q = this.holdQuat.slice();
     } else {
