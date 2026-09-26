@@ -3,6 +3,7 @@ import { BottleSim, DT } from './physics.js';
 import { BOTTLES, FLUIDS, MAPS, TABLE, THROW } from './config.js';
 import { BottleView, LABELS } from './bottleView.js';
 import { buildWorld } from './world.js';
+import { computeGuide } from './guide.js';
 
 // ---------- 저장 (브라우저별 편의 기능, 실패해도 동작) ----------
 const STORE_KEY = 'bottleflip3d.v1';
@@ -33,7 +34,7 @@ const persist = () => save({ opts, look, tuning, best: stats.best, prefs, angle:
 // ---------- 렌더러 ----------
 const canvas = document.getElementById('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.localClippingEnabled = true;
@@ -80,35 +81,39 @@ const scheduleGuideSoon = () => {
   clearTimeout(guideSoonTimer);
   guideSoonTimer = setTimeout(scheduleGuide, 300);
 };
+let guideWorker = null;
+try {
+  guideWorker = new Worker(new URL('./guideWorker.js', import.meta.url), { type: 'module' });
+  guideWorker.onmessage = (e) => {
+    if (e.data.job !== guideJob) return; // 그 사이 조건이 바뀐 옛 결과
+    guide = e.data.results;
+    drawGuide();
+  };
+  guideWorker.onerror = () => { guideWorker = null; scheduleGuide(); };
+} catch {
+  guideWorker = null; // 워커를 못 쓰는 환경이면 메인 스레드에서 계산
+}
 function scheduleGuide() {
   const job = ++guideJob;
   guide = null;
   drawGuide();
   // 손 앞뒤 위치에 따라 테이블 안에 떨어지는지가 달라지므로 현재 손 위치로 계산
-  const zForGuide = hand.z;
-  guideZ = zForGuide;
-  const probe = new BottleSim({ ...opts, tuning: { spinBase: tuning.spinBase, spinRatio: tuning.spinRatio } });
-  const results = [];
-  const step = 0.05;
-  let p = 0;
-  const work = () => {
-    if (job !== guideJob) return;
-    const t0 = performance.now();
-    while (p <= THROW.maxPower + 1e-9 && performance.now() - t0 < 12) {
-      probe.reset();
-      probe.setHold(0, zForGuide, handLift(p));
-      probe.throw({ power: p, angle: aim.angle });
-      const r = probe.runToEnd();
-      results.push({ p, ok: r && (r.outcome === 'upright' || r.outcome === 'cap') });
-      p += step;
-    }
-    if (p <= THROW.maxPower + 1e-9) setTimeout(work, 0);
-    else {
-      guide = results;
-      drawGuide();
-    }
+  guideZ = hand.z;
+  const req = {
+    simOpts: { ...opts, tuning: { spinBase: tuning.spinBase, spinRatio: tuning.spinRatio } },
+    z: hand.z,
+    angle: aim.angle,
+    liftBase: HAND_LIFT,
+    dragLift: DRAG_LIFT,
+    maxPower: THROW.maxPower,
+    step: 0.05,
   };
-  setTimeout(work, 50);
+  if (guideWorker) guideWorker.postMessage({ job, req });
+  else setTimeout(() => {
+    if (job !== guideJob) return;
+    guide = computeGuide(req);
+    drawGuide();
+  }, 50);
 }
 
 const meter = document.getElementById('meter');
@@ -388,7 +393,11 @@ $('angle').textContent = `${aim.angle}°`;
 canvas.addEventListener('wheel', (e) => {
   if (mode !== 'play') return;
   e.preventDefault();
-  setAngle(aim.angle + (e.deltaY < 0 ? 1 : -1));
+  // 한 칸에 1°, Shift 를 누르면 5°
+  const stepDeg = e.shiftKey ? 5 : 1;
+  const d = e.deltaY || e.deltaX; // Shift+휠은 가로 스크롤로 오는 환경이 있다
+  if (!d) return;
+  setAngle(aim.angle + (d < 0 ? stepDeg : -stepDeg));
 }, { passive: false });
 
 addEventListener('keydown', (e) => {
@@ -439,6 +448,7 @@ function onResult(r) {
 // ---------- 카메라 ----------
 // 1인칭: 내 자리(테이블 앞쪽 의자)에 앉은 눈높이
 const camPlay = { pos: EYE.clone(), look: new THREE.Vector3(0, 0.8, 0.0) };
+const LOOK_Y = 0.93; // 시선 높이: 높을수록 손에 든 병이 화면 아래로 내려간다
 const LOOK_FOLLOW = 0.8; // 커서 좌우를 따라 고개를 돌리는 정도 (0 = 고정, 1 = 병을 정면으로)
 const camMenu = { pos: new THREE.Vector3(-0.2, 0.9, 0.68), look: new THREE.Vector3(-0.17, 0.85, 0.3) };
 const camPos = camMenu.pos.clone();
@@ -527,7 +537,7 @@ function frame(now) {
   // 카메라 (기차는 흔들림 반영)
   const target = mode === 'menu' ? camMenu : camPlay;
   // 1인칭: 병(손)이 있는 쪽으로 고개를 돌린다
-  if (mode === 'play') camPlay.look.set(hand.x * LOOK_FOLLOW, 0.8, 0);
+  if (mode === 'play') camPlay.look.set(hand.x * LOOK_FOLLOW, LOOK_Y, 0);
   const k = 1 - Math.exp(-real * 4);
   // 병이 높이 뜨면 고개를 들어 따라본다 (몸은 그대로)
   const lift = mode === 'play' ? Math.max(0, sim.x[1] - 0.95) : 0;

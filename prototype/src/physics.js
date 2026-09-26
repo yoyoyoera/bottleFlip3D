@@ -173,7 +173,10 @@ export class BottleSim {
     const fwd = vUp * Math.tan((angle * Math.PI) / 180);
     const v = [dir[0] * fwd, vUp, dir[1] * fwd];
     const axis = BottleSim.spinAxis(dir);
-    const w = scale(axis, c.spinBase + c.spinRatio * vUp);
+    // 기울여 던질수록(낮고 빠른 궤적) 손목 스냅이 더 들어가 회전이 빨라진다.
+    // 그래야 체공이 짧아도 한 바퀴를 돌 수 있다.
+    const snap = 1 + c.angleSpin * Math.sin((angle * Math.PI) / 180);
+    const w = scale(axis, (c.spinBase + c.spinRatio * vUp) * snap);
     this.held = false;
     // 시작 자세: 위쪽이 던지는 사람 쪽으로 정확히 startTilt 만큼 기운 상태 (결과가 결정적이도록)
     const want = quatFromAxisAngle(axis, (c.startTilt * Math.PI) / 180);
