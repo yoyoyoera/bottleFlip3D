@@ -17,7 +17,7 @@ const isOk = (r) => r.outcome === 'upright' || r.outcome === 'cap';
 test('같은 입력이면 결과가 완전히 같다 (결정성)', () => {
   const run = () => {
     const sim = new BottleSim({ fluid: 'soda', map: 'train', seed: 7 });
-    sim.throw({ power: 1.05, lateral: 0.1 });
+    sim.throw({ power: 1.05, dir: [0.3, -0.95] });
     sim.runToEnd();
     return JSON.stringify(sim.snapshot());
   };
@@ -45,8 +45,9 @@ test('유체가 공중에서 회전을 늦춘다 (빈 병보다 회전수가 적
     sim.throw({ power: 1.1 });
     let maxW = 0;
     let minW = Infinity;
-    while (!sim.landed && sim.flightTime < 2) {
+    while (sim.flightTime < 2) {
       sim.step();
+      if (sim.landed) break; // 착지 충격은 제외
       const w = Math.hypot(...sim.w);
       maxW = Math.max(maxW, w);
       minW = Math.min(minW, w);
@@ -71,10 +72,37 @@ test('꿀은 물보다 세게 던져야 선다', () => {
   assert.ok(center('honey') > center('water'));
 });
 
+test('사선으로 던져도 성공 구간이 비슷하다', () => {
+  const count = (dir) => {
+    const sim = new BottleSim({});
+    let n = 0;
+    for (let p = 0; p <= 1.5 + 1e-9; p += 0.05) {
+      sim.reset();
+      sim.throw({ power: p, dir });
+      if (sim.runToEnd().outcome === 'upright') n++;
+    }
+    return n;
+  };
+  const straight = count([0, -1]);
+  const diag = count([0.6, -0.8]);
+  assert.ok(straight >= 3 && Math.abs(straight - diag) <= 2, `straight ${straight} diag ${diag}`);
+});
+
+test('병 위쪽이 던지는 사람 쪽으로 넘어오며 돈다', () => {
+  const sim = new BottleSim({});
+  sim.throw({ power: 1.0 });
+  const up0 = sim.up();
+  assert.ok(up0[2] > 0.3, '시작할 때 위쪽이 나(+z)를 향해 기울어 있어야 함');
+  for (let i = 0; i < 0.1 / DT; i++) sim.step();
+  assert.ok(sim.up()[2] > up0[2], '위쪽이 계속 내 쪽으로 넘어와야 함');
+});
+
 test('테이블 밖으로 나가면 offtable', () => {
   const sim = new BottleSim({});
-  sim.throw({ power: 1.0, lateral: 1 });
-  sim.v[0] = 6; // 옆으로 날려버림
+  sim.throw({ power: 1.0 });
+  // 병과 안의 물을 통째로 옆으로 날려버림
+  sim.v[0] = 6;
+  for (const v of sim.pv) v[0] = 6;
   const r = sim.runToEnd();
   assert.equal(r.outcome, 'offtable');
 });

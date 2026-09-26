@@ -238,14 +238,36 @@ let charge = null;
 let lastPower = null;
 const hand = { x: 0, z: THROW.startZ }; // 병을 쥔 손의 테이블 위 위치
 const HAND_X = TABLE.halfX - 0.1;
+const EYE = new THREE.Vector3(0, 1.2, 0.9); // 1인칭 눈 위치 (내 의자)
+// 던지는 방향 = 내 눈에서 병을 바라본 수평 방향 → 테이블 기준으로는 사선 던지기
+const throwDir = () => {
+  const dx = hand.x - EYE.x;
+  const dz = hand.z - EYE.z;
+  const l = Math.hypot(dx, dz) || 1;
+  return [dx / l, dz / l];
+};
+// 손에 든 병 자세: 힘을 모을수록 들리고, 위쪽이 내 쪽으로 기운다 (던지기 준비 동작)
+const hold = (power = 0) => {
+  const k = power / THROW.maxPower;
+  sim.setHold(hand.x, hand.z, k * DRAG_LIFT, THROW.startTilt * Math.min(1, power / 0.3), throwDir());
+};
 const HAND_Z = [0.05, TABLE.halfZ - 0.06];
 
 const raycaster = new THREE.Raycaster();
+// 커서 → 테이블 위치 변환은 고정된 기준 카메라로 한다.
+// (실제 카메라는 커서를 따라 고개를 돌리므로, 그걸 쓰면 병 위치가 되먹임으로 흔들린다)
+const refCam = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.01, 60);
+refCam.position.copy(EYE);
+refCam.lookAt(0, 0.8, 0);
+addEventListener('resize', () => {
+  refCam.aspect = innerWidth / innerHeight;
+  refCam.updateProjectionMatrix();
+});
 const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -TABLE.y);
 // 커서가 가리키는 테이블 위 지점 → 손 위치
 function aimHand(e) {
   const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
+  raycaster.setFromCamera(ndc, refCam);
   const hit = raycaster.ray.intersectPlane(tablePlane, new THREE.Vector3());
   if (!hit) return;
   hand.x = Math.max(-HAND_X, Math.min(HAND_X, hit.x));
@@ -256,16 +278,16 @@ function resetThrow() {
   drag = null;
   charge = null;
   sim.reset();
-  sim.setHold(hand.x, hand.z, 0);
+  hold(0);
   resultShownAt = 0;
   meterMark.style.opacity = 0;
   setMeter(0);
 }
 
-function doThrow(power, lateral = 0) {
+function doThrow(power) {
   if (sim.state !== 'ready') return;
   lastPower = power;
-  sim.throw({ power, lateral, angle: aim.angle });
+  sim.throw({ power, angle: aim.angle, dir: throwDir() });
   setMeter(power, power);
   $('last').textContent = '';
 }
@@ -277,12 +299,12 @@ canvas.addEventListener('pointermove', (e) => {
   if (mode !== 'play' || sim.state !== 'ready') return;
   if (!drag) {
     aimHand(e);
-    sim.setHold(hand.x, hand.z, 0);
+    hold(0);
     return;
   }
   // 힘 모으는 중: 손 위치는 고정, 끈 만큼 병이 들리고 미터가 찬다
   drag.power = Math.min(THROW.maxPower, dragPower(drag, e.clientY));
-  sim.setHold(hand.x, hand.z, (drag.power / THROW.maxPower) * DRAG_LIFT);
+  hold(drag.power);
   setMeter(drag.power);
 });
 canvas.addEventListener('pointerdown', (e) => {
@@ -298,7 +320,7 @@ const endDrag = () => {
   drag = null;
   if (p < 0.05) {
     // 거의 안 끌었으면 던지지 않고 내려놓기
-    sim.setHold(hand.x, hand.z, 0);
+    hold(0);
     setMeter(0);
     return;
   }
@@ -308,7 +330,7 @@ canvas.addEventListener('pointerup', endDrag);
 const cancelDrag = () => {
   if (!drag) return;
   drag = null;
-  sim.setHold(hand.x, hand.z, 0);
+  hold(0);
   setMeter(0);
 };
 canvas.addEventListener('pointercancel', cancelDrag);
@@ -377,7 +399,8 @@ function onResult(r) {
 
 // ---------- 카메라 ----------
 // 1인칭: 내 자리(테이블 앞쪽 의자)에 앉은 눈높이
-const camPlay = { pos: new THREE.Vector3(0, 1.2, 0.9), look: new THREE.Vector3(0, 0.8, 0.0) };
+const camPlay = { pos: EYE.clone(), look: new THREE.Vector3(0, 0.8, 0.0) };
+const LOOK_FOLLOW = 0.8; // 커서 좌우를 따라 고개를 돌리는 정도 (0 = 고정, 1 = 병을 정면으로)
 const camMenu = { pos: new THREE.Vector3(-0.2, 0.9, 0.68), look: new THREE.Vector3(-0.17, 0.85, 0.3) };
 const camPos = camMenu.pos.clone();
 const camLook = camMenu.look.clone();
@@ -407,17 +430,18 @@ function updateArc() {
   const power = drag ? drag.power : charge ? chargePower() : 1.0;
   arc.material.opacity = drag || charge ? 0.9 : 0.35;
   const vUp = THROW.minUp + THROW.upPerPower * power;
-  const vz = -vUp * Math.tan((aim.angle * Math.PI) / 180);
+  const fwd = vUp * Math.tan((aim.angle * Math.PI) / 180);
+  const [dx, dz] = throwDir();
   const g = MAPS[opts.map].gravity;
   const T = (2 * vUp) / g;
   const pos = arcGeo.attributes.position;
   const y0 = TABLE.y + 0.005;
   for (let i = 0; i < ARC_N; i++) {
     const t = (i / (ARC_N - 1)) * T;
-    pos.setXYZ(i, hand.x, y0 + vUp * t - 0.5 * g * t * t, hand.z + vz * t);
+    pos.setXYZ(i, hand.x + dx * fwd * t, y0 + vUp * t - 0.5 * g * t * t, hand.z + dz * fwd * t);
   }
   pos.needsUpdate = true;
-  landMark.position.set(hand.x, TABLE.y + 0.002, hand.z + vz * T);
+  landMark.position.set(hand.x + dx * fwd * T, TABLE.y + 0.002, hand.z + dz * fwd * T);
   landMark.material.opacity = arc.material.opacity;
   arcGeo.computeBoundingSphere();
   arc.computeLineDistances();
@@ -437,7 +461,7 @@ function frame(now) {
   if (charge) {
     const p = chargePower();
     setMeter(p);
-    sim.setHold(hand.x, hand.z, (p / THROW.maxPower) * DRAG_LIFT);
+    hold(p);
   }
   if (!prefs.showMeter && !charge) meter.style.opacity = 0;
   else meter.style.opacity = 1;
@@ -460,6 +484,8 @@ function frame(now) {
 
   // 카메라 (기차는 흔들림 반영)
   const target = mode === 'menu' ? camMenu : camPlay;
+  // 1인칭: 병(손)이 있는 쪽으로 고개를 돌린다
+  if (mode === 'play') camPlay.look.set(hand.x * LOOK_FOLLOW, 0.8, 0);
   const k = 1 - Math.exp(-real * 4);
   // 병이 높이 뜨면 고개를 들어 따라본다 (몸은 그대로)
   const lift = mode === 'play' ? Math.max(0, sim.x[1] - 0.95) : 0;

@@ -45,8 +45,8 @@ export const THROW = {
   angle: 6, // 기본 던지기 각도(도). 앞으로 나가는 속도 = 위 속도 * tan(각도)
   minAngle: 0,
   maxAngle: 20, // 이보다 크면 테이블 밖으로 나간다
-  lateralPerPower: 0.5, // 좌우 조준
-  spinBase: 17, // 회전(rad/s) = spinBase + 위 속도 * spinRatio
+  startTilt: 20, // 던지기 직전 병 위쪽이 나를 향해 기운 각도(도)
+  spinBase: 19, // 회전(rad/s) = spinBase + 위 속도 * spinRatio
   spinRatio: 1.5,
   startZ: 0.3,
 };

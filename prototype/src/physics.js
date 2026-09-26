@@ -19,6 +19,7 @@ const MARGIN = 0.004; // 스펙큘러티브 접촉 여유
 const SLOP = 0.0005;
 const BAUMGARTE = 0.25;
 const ABSORB_WINDOW = 0.15; // 착지 흡수가 작동하는 시간 (s)
+const HOLD_MAX_SPIN = 10; // 손에 든 병이 기울기를 따라가는 최대 각속도 (rad/s)
 const HOLD_MAX_SPEED = 4; // 손에 든 병이 커서를 따라가는 최대 속도 (m/s)
 const LAUNCH_LIFT = 0.05; // 던지는 순간 병 바닥의 최소 높이 (m)
 
@@ -138,21 +139,46 @@ export class BottleSim {
   }
 
   // ---- 입력 ----
-  // 손에 든 병을 (x, z) 위치, 테이블 위 lift 높이로 옮긴다. 움직이면 물이 출렁인다.
-  setHold(x, z, lift = 0) {
-    if (!this.held) return;
-    this.holdPos = [x, TABLE.y + 0.0005 + lift, z];
+  // 던지는 방향 dir = [dx, dz] (수평 단위벡터) 에 대한 회전축.
+  // 축 방향으로 +회전하면 병 위쪽이 던지는 사람 쪽으로 넘어오고 아래쪽이 위로 올라간다.
+  static spinAxis(dir) {
+    return normalize(cross([dir[0], 0, dir[1]], [0, 1, 0]));
   }
 
-  // power: 0 ~ maxPower, lateral: -1 ~ 1, angle: 앞으로 기울여 던지는 각도(도)
-  throw({ power, lateral = 0, angle = this.throwCfg.angle }) {
+  // 손에 든 병을 (x, z) 위치, 테이블 위 lift 높이로 옮긴다. 움직이면 물이 출렁인다.
+  // tilt: 병 위쪽을 던지는 사람 쪽으로 기울인 각도(도)
+  setHold(x, z, lift = 0, tilt = 0, dir = [0, -1]) {
+    if (!this.held) return;
+    this.holdPos = [x, TABLE.y + 0.0005 + lift, z];
+    this.holdQuat = quatFromAxisAngle(BottleSim.spinAxis(dir), (tilt * Math.PI) / 180);
+  }
+
+  // 병과 유체를 바닥 중심을 축으로 통째로 돌린다
+  rotateRigid(dq) {
+    const pivot = this.bottomWorld();
+    const turn = (p) => add(pivot, rotate(dq, sub(p, pivot)));
+    this.x = turn(this.x);
+    this.p = this.p.map(turn);
+    this.q = quatNormalize(quatMul(dq, this.q));
+  }
+
+  // power: 0 ~ maxPower
+  // angle: 앞으로 기울여 던지는 각도(도), dir: 수평 던지기 방향 [dx, dz] (기본: 테이블 안쪽 -z)
+  throw({ power, angle = this.throwCfg.angle, dir = [0, -1] }) {
     if (this.state !== 'ready') return null;
     const c = this.throwCfg;
     power = Math.max(0, Math.min(c.maxPower, power));
+    const dl = Math.hypot(dir[0], dir[1]) || 1;
+    dir = [dir[0] / dl, dir[1] / dl];
     const vUp = c.minUp + c.upPerPower * power;
-    const v = [lateral * c.lateralPerPower, vUp, -vUp * Math.tan((angle * Math.PI) / 180)];
-    const w = [-(c.spinBase + c.spinRatio * vUp), 0, 0];
+    const fwd = vUp * Math.tan((angle * Math.PI) / 180);
+    const v = [dir[0] * fwd, vUp, dir[1] * fwd];
+    const axis = BottleSim.spinAxis(dir);
+    const w = scale(axis, c.spinBase + c.spinRatio * vUp);
     this.held = false;
+    // 시작 자세: 위쪽이 던지는 사람 쪽으로 정확히 startTilt 만큼 기운 상태 (결과가 결정적이도록)
+    const want = quatFromAxisAngle(axis, (c.startTilt * Math.PI) / 180);
+    this.rotateRigid(quatMul(want, [-this.q[0], -this.q[1], -this.q[2], this.q[3]]));
     // 손이 병을 들어 올린 상태에서 놓는다 (바닥이 테이블을 긁으며 출발하지 않도록)
     const lift = TABLE.y + LAUNCH_LIFT - this.bottomWorld()[1];
     if (lift > 0) {
@@ -173,7 +199,7 @@ export class BottleSim {
     this.throwTime = this.time;
     this.flightTime = 0;
     this.spinAngle = 0;
-    this.throwInfo = { power, lateral, angle, vUp, spin: -w[0] };
+    this.throwInfo = { power, angle, dir, vUp, spin: len(w) };
     return this.throwInfo;
   }
 
@@ -200,13 +226,21 @@ export class BottleSim {
 
     // 손에 든 상태: 목표 자세로 가는 속도를 직접 설정 (키네마틱)
     if (heldInv) {
-      const target = add(this.holdPos, this.com);
+      const target = add(this.holdPos, rotate(this.holdQuat, this.com));
       // 커서를 바짝 따라가되, 순간이동으로 물이 폭발하지 않게 속도 상한을 둔다
       this.v = scale(sub(target, this.x), 0.5 / dt);
       const sp = len(this.v);
       if (sp > HOLD_MAX_SPEED) this.v = scale(this.v, HOLD_MAX_SPEED / sp);
-      this.w = [0, 0, 0];
-      this.q = this.holdQuat.slice();
+      // 기울기도 각속도로 따라가게 해서 안의 물이 자연스럽게 반응한다
+      let dq = quatMul(this.holdQuat, [-this.q[0], -this.q[1], -this.q[2], this.q[3]]);
+      if (dq[3] < 0) dq = dq.map((c) => -c);
+      const sinH = Math.hypot(dq[0], dq[1], dq[2]);
+      if (sinH > 1e-6) {
+        const ang = 2 * Math.atan2(sinH, dq[3]);
+        let wm = (ang * 0.5) / dt;
+        if (wm > HOLD_MAX_SPIN) wm = HOLD_MAX_SPIN;
+        this.w = scale([dq[0], dq[1], dq[2]], wm / sinH);
+      } else this.w = [0, 0, 0];
     } else {
       this.v = add(this.v, scale(g, dt));
     }
