@@ -87,3 +87,25 @@ button.icon { padding: 2px 8px; }
 .scoreboard .p .sc { font-variant-numeric: tabular-nums; font-weight: 700; }
 .scoreboard .p .st { font-size: 11px; color: var(--muted); }
 .turn-banner { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: var(--panel); padding: 8px 18px; border-radius: 20px; font-size: 18px; font-weight: 700; white-space: nowrap; border: 2px solid var(--accent); }
+
+.pitch-clock { position: fixed; top: 68px; left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 12px; background: var(--panel); font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pitch-clock.urgent { color: var(--bad); outline: 2px solid var(--bad); }
+#onlineForm, #onlineLobby { display: grid; gap: 12px; }
+#online input { width: 100%; background: #1d2430; color: var(--text); border: 1px solid #536074; border-radius: 8px; padding: 10px; font: inherit; }
+#onlineCode { text-transform: uppercase; letter-spacing: 3px; }
+.room-code { margin: 0; }
+.room-code b { display: block; font-size: 32px; letter-spacing: 5px; color: var(--accent); user-select: all; }
+#roomPlayers { margin: 0; padding-left: 20px; line-height: 1.8; }
+#onlineStatus { color: #ffd36e; min-height: 18px; }
+@media (max-width: 720px) {
+  .hud-buttons { top: auto; bottom: 54px; right: 12px; }
+  .hud .stats { gap: 4px; }
+  .hud .stats div { padding: 4px 8px; min-width: 48px; }
+  .scoreboard { min-width: 0; right: 12px; left: 12px; top: 70px; }
+  .scoreboard .p { padding: 3px 8px; }
+  .turn-banner { left: 12px; transform: none; font-size: 14px; max-width: calc(100vw - 100px); overflow: hidden; text-overflow: ellipsis; }
+  .pitch-clock { top: 16px; left: auto; right: 12px; transform: none; font-size: 16px; }
+  .toast { top: 38%; }
+  .last { top: calc(38% + 36px); font-size: 12px; }
+  .meter { bottom: 104px; }
+}

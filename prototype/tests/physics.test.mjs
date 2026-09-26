@@ -123,3 +123,16 @@ test('테이블 밖으로 나가면 offtable', () => {
   const r = sim.runToEnd();
   assert.equal(r.outcome, 'offtable');
 });
+
+test('유리병과 가득 찬 페트병은 보통 던지기에서 과도하게 회전하지 않는다', () => {
+  for (const opts of [{ bottle: 'glass', fill: 0.3 }, { bottle: 'standard', fill: 1 }, { bottle: 'glass', fill: 1 }]) {
+    const sim = new BottleSim(opts);
+    sim.throw({ power: 1, start: [0, 0.95, 0.5] });
+    while (!sim.landed && sim.state !== 'done') {
+      sim.step();
+      assert.ok([...sim.x, ...sim.w, ...sim.q].every(Number.isFinite));
+    }
+    assert.ok(sim.spinAngle / (2 * Math.PI) < 1.6, JSON.stringify(opts));
+    assert.ok(sim.spinAngle / (2 * Math.PI) > 0.25, '병이 회전을 멈추지는 않아야 함');
+  }
+});

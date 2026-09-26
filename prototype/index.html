@@ -14,11 +14,30 @@
       <h1>Bottle Flip <span>3D</span></h1>
       <button data-act="practice" class="primary">연습 <small>혼자 무한으로 던지기</small></button>
       <button data-act="local">멀티 (한 PC) <small>2~4명이 번갈아 던지기</small></button>
-      <button data-act="join" disabled>Join <small>코드 입력 · 온라인 준비 중</small></button>
-      <button data-act="host" disabled>Host <small>방 만들기 · 온라인 준비 중</small></button>
+      <button data-act="join">Join <small>방 코드로 온라인 참가</small></button>
+      <button data-act="host">Host <small>온라인 방 만들기 · 최대 4명</small></button>
       <button data-act="customize">Customize</button>
       <button data-act="settings">Settings</button>
-      <p class="ver">던지기 손맛 프로토타입 v0.1</p>
+      <p class="ver">온라인 프로토타입 v0.2 · 멀티 턴 제한 15초</p>
+    </div>
+
+    <div id="online" class="panel setup hidden">
+      <div class="panel-head"><b id="onlineTitle">온라인</b><button id="onlineClose" class="icon" aria-label="온라인 닫기">✕</button></div>
+      <div id="onlineForm">
+        <label>내 이름<input id="onlineName" maxlength="12" value="플레이어" /></label>
+        <label id="codeField">방 코드<input id="onlineCode" maxlength="6" placeholder="6자리 코드" autocomplete="off" /></label>
+        <p id="hostInfo" class="info"></p>
+        <button id="onlineSubmit" class="primary">방 만들기</button>
+      </div>
+      <div id="onlineLobby" class="hidden">
+        <p class="room-code">방 코드 <b id="roomCode"></b></p>
+        <p class="info">같은 서버 주소에 접속한 친구에게 코드를 알려주세요. 최대 4명 · 매 턴 15초</p>
+        <ul id="roomPlayers"></ul>
+        <p id="roomSettings" class="info"></p>
+        <button id="onlineStart" class="primary">게임 시작</button>
+        <button id="onlineLeave">방 나가기</button>
+      </div>
+      <p id="onlineStatus" role="status" class="info"></p>
     </div>
 
     <!-- 멀티 설정 -->
@@ -52,6 +71,7 @@
       <label class="check"><input id="capDouble" type="checkbox" checked /> 뚜껑 착지는 2점</label>
       <label class="check"><input id="continueOnHit" type="checkbox" /> 성공하면 한 번 더 던지기</label>
       <button id="setupStart" class="primary">시작</button>
+      <p class="info">매 턴 15초 안에 던지세요. 시간 초과는 0점으로 차례가 넘어갑니다.</p>
     </div>
 
     <!-- 멀티 결과 -->
@@ -110,6 +130,7 @@
       </div>
       <div class="scoreboard hidden" id="scoreboard"></div>
       <div class="turn-banner hidden" id="turnBanner"></div>
+      <div id="pitchClock" class="pitch-clock hidden" role="timer" aria-label="남은 던지기 시간"></div>
       <div class="hud-buttons">
         <button id="btnCustom">커스터마이즈</button>
         <button id="btnSettings">설정</button>

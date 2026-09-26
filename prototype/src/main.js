@@ -5,6 +5,19 @@ import { BottleView, LABELS } from './bottleView.js';
 import { buildWorld } from './world.js';
 import { computeGuide } from './guide.js';
 import { MODES, createMatch, recordThrow, advanceTurn, ranking } from './rules.js';
+import { TurnClock } from './turnClock.js';
+import { RoomConnection } from './network.js';
+
+const turnClock = new TurnClock();
+let onlineRoom = null;
+let onlineId = null;
+let onlinePending = false;
+let localSetup = null;
+let onlineAction = 'host';
+let remoteSnapshot = null;
+const isMyTurn = () => !onlineRoom || onlineRoom.match?.players[onlineRoom.match.turn].id === onlineId;
+const canControl = () => mode === 'play' && sim.state === 'ready' &&
+  (!onlineRoom || (onlineRoom.phase === 'ready' && isMyTurn() && !onlinePending));
 
 // ---------- 저장 (브라우저별 편의 기능, 실패해도 동작) ----------
 const STORE_KEY = 'bottleflip3d.v1';
@@ -40,7 +53,7 @@ const matchCfg = {
   names: ['플레이어 1', '플레이어 2', '플레이어 3', '플레이어 4'],
   ...saved.matchCfg,
 };
-const persist = () => save({ opts, look, tuning, best: stats.best, prefs, angle: aim.angle, matchCfg });
+const persist = () => { if (!onlineRoom) save({ opts, look, tuning, best: stats.best, prefs, angle: aim.angle, matchCfg }); };
 
 // ---------- 렌더러 ----------
 const canvas = document.getElementById('view');
@@ -110,6 +123,7 @@ function scheduleGuide() {
   const job = ++guideJob;
   guide = null;
   drawGuide();
+  if (game === 'match') return;
   // 손 위치/방향에 따라 테이블 안에 떨어지는지가 달라지므로 현재 손 위치로 계산
   guidePos.x = hand.x;
   guidePos.z = hand.z;
@@ -138,7 +152,7 @@ const meterFill = document.getElementById('meterFill');
 const meterMark = document.getElementById('meterMark');
 function drawGuide() {
   meter.querySelectorAll('.band').forEach((b) => b.remove());
-  if (!guide) return;
+  if (!guide || game === 'match') return;
   for (const g of guide) {
     if (!g.ok) continue;
     const b = document.createElement('div');
@@ -238,6 +252,7 @@ document.querySelectorAll('#menu button').forEach((b) => {
     const act = b.dataset.act;
     if (act === 'practice') startPractice();
     if (act === 'local') openSetup();
+    if (act === 'host' || act === 'join') openOnline(act);
     if (act === 'customize') { togglePanel('settings', false); togglePanel('panel', true); }
     if (act === 'settings') { togglePanel('panel', false); togglePanel('settings', true); }
   };
@@ -386,11 +401,19 @@ function resetThrow() {
   afterPending = false;
   meterMark.style.opacity = 0;
   setMeter(0);
+  $('last').textContent = '';
 }
 
 function doThrow(power) {
-  if (sim.state !== 'ready') return;
+  if (!canControl() || expireLocalTurn()) return;
   lastPower = power;
+  if (onlineRoom) {
+    const [x, z] = handWorld();
+    onlinePending = network.send({ type: 'throw', turnId: onlineRoom.turnId,
+      input: { power, angle: aim.angle, dir: throwDir(), start: [x, TABLE.y + 0.0005 + handLift(power), z] } });
+    return;
+  }
+  turnClock.stop();
   sim.throw({ power, angle: aim.angle, dir: throwDir() });
   setMeter(power, power);
   $('last').textContent = '';
@@ -400,7 +423,7 @@ const dragPower = (d, y) => Math.max(0, (d.startY - y) / innerHeight / tuning.dr
 const DRAG_LIFT = 0.05; // 힘을 모을수록 병을 이만큼까지 들어 올린다 (m)
 
 canvas.addEventListener('pointermove', (e) => {
-  if (mode !== 'play' || sim.state !== 'ready') return;
+  if (!canControl()) return;
   if (!drag) {
     aimHandZ(e);
     aimHand(e);
@@ -413,7 +436,7 @@ canvas.addEventListener('pointermove', (e) => {
   setMeter(drag.power);
 });
 canvas.addEventListener('pointerdown', (e) => {
-  if (mode !== 'play' || sim.state !== 'ready' || e.button !== 0) return;
+  if (!canControl() || expireLocalTurn() || e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
   drag = { startY: e.clientY, power: 0 };
   meterMark.style.opacity = 0;
@@ -451,7 +474,7 @@ const setAngle = (deg) => {
   guideTimer = setTimeout(() => { scheduleGuide(); persist(); }, 250);
 };
 canvas.addEventListener('wheel', (e) => {
-  if (mode !== 'play') return;
+  if (!canControl()) return;
   e.preventDefault();
   // 한 칸에 1°, Shift 를 누르면 5°
   const stepDeg = e.shiftKey ? 5 : 1;
@@ -462,6 +485,9 @@ canvas.addEventListener('wheel', (e) => {
 
 addEventListener('keydown', (e) => {
   if (mode !== 'play') return;
+  if (e.target instanceof HTMLElement && e.target.closest('input, select, textarea, button')) return;
+  if (onlineRoom && !canControl()) return;
+  if (expireLocalTurn()) return;
   if (e.code === 'Space' && !e.repeat && sim.state === 'ready') {
     charge = { t0: performance.now() };
     meterMark.style.opacity = 0;
@@ -493,7 +519,7 @@ function throwInfo(r) {
   return `${pct} · ${r.rotations.toFixed(2)}회전 · 체공 ${r.airTime != null ? r.airTime.toFixed(2) : '-'}s`;
 }
 function onResult(r) {
-  $('last').textContent = throwInfo(r);
+  $('last').textContent = r.outcome === 'timeout' ? '던지지 않아 0점 처리됐습니다.' : throwInfo(r);
   if (game === 'match') return onMatchResult(r);
   stats.all++;
   if (isHit(r.outcome)) {
@@ -514,6 +540,7 @@ function onResult(r) {
 
 // 결과를 보여준 뒤 (약 1.7초) 다음으로
 function afterResult() {
+  if (onlineRoom) return;
   if (game === 'practice') return resetThrow();
   if (match.over) return showMatchResult();
   const i = advanceTurn(match);
@@ -521,6 +548,7 @@ function afterResult() {
   resetThrow();
   updateSeats();
   renderScoreboard();
+  turnClock.start(performance.now());
   showToast(`${match.players[i].name} 차례`, 'ok');
 }
 
@@ -530,9 +558,11 @@ let match = null;
 const SEAT_ORDER = { 2: [0, 1], 3: [0, 2, 1], 4: [0, 2, 1, 3] }; // 테이블을 도는 순서
 
 function hidePanels() {
-  for (const id of ['panel', 'settings', 'setup', 'result']) togglePanel(id, false);
+  for (const id of ['panel', 'settings', 'setup', 'result', 'online']) togglePanel(id, false);
 }
 function goMenu() {
+  if (onlineRoom) leaveOnline();
+  turnClock.stop();
   hidePanels();
   game = 'practice';
   match = null;
@@ -540,8 +570,10 @@ function goMenu() {
   setMode('menu');
   resetThrow();
   updateSeats();
+  lockMatchSettings(false);
 }
 function startPractice() {
+  turnClock.stop();
   hidePanels();
   game = 'practice';
   match = null;
@@ -552,6 +584,7 @@ function startPractice() {
   setMode('play');
   resetThrow();
   updateSeats();
+  lockMatchSettings(false);
 }
 function startMatch() {
   hidePanels();
@@ -568,6 +601,7 @@ function startMatch() {
     continueOnHit: matchCfg.continueOnHit,
   });
   game = 'match';
+  scheduleGuide();
   sitAt(match.players[0].seat);
   $('practiceStats').classList.add('hidden');
   $('scoreboard').classList.remove('hidden');
@@ -576,15 +610,46 @@ function startMatch() {
   resetThrow();
   updateSeats();
   renderScoreboard();
+  turnClock.start(performance.now());
+  lockMatchSettings(true);
   showToast(`${match.players[0].name} 차례`, 'ok');
 }
+
+function lockMatchSettings(locked) {
+  $('btnCustom').disabled = locked;
+  $('btnSettings').disabled = locked;
+}
+
+function expireLocalTurn() {
+  if (onlineRoom || game !== 'match' || !match || match.over || sim.state !== 'ready' || !turnClock.expired(performance.now())) return false;
+  turnClock.stop();
+  drag = null; charge = null;
+  sim.state = 'done'; sim.held = false;
+  sim.result = { outcome: 'timeout', rotations: 0, airTime: null };
+  lastPower = null;
+  resultShownAt = performance.now();
+  onResult(sim.result);
+  return true;
+}
+
+function updateClock() {
+  expireLocalTurn();
+  const visible = mode === 'play' && game === 'match' && match && !match.over;
+  $('pitchClock').classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const ready = onlineRoom ? onlineRoom.phase === 'ready' : sim.state === 'ready';
+  const left = Math.ceil(turnClock.remaining(performance.now()) / 1000);
+  $('pitchClock').textContent = ready ? `${left}초` : '판정 중';
+  $('pitchClock').classList.toggle('urgent', ready && left <= 5);
+}
+setInterval(updateClock, 100);
 
 function onMatchResult(r) {
   const p = match.players[match.turn];
   const res = recordThrow(match, r.outcome);
   if (r.outcome === 'cap') showToast(`뚜껑 착지!! +${res.points}`, 'gold');
   else if (res.points) showToast(`성공! +${res.points}`, 'ok');
-  else showToast(r.outcome === 'offtable' ? '테이블 밖으로…' : '쓰러짐', 'bad');
+  else showToast(r.outcome === 'timeout' ? '시간 초과 · 0점' : r.outcome === 'offtable' ? '테이블 밖으로…' : '쓰러짐', 'bad');
   if (res.finished && !res.over) {
     setTimeout(() => showToast(`${p.name} 통과! ${p.place}등`, 'gold'), 800);
   }
@@ -609,7 +674,7 @@ function renderScoreboard() {
   const banner = $('turnBanner');
   const cur = match.players[match.turn];
   banner.classList.toggle('hidden', match.over);
-  banner.textContent = `${cur.name} 차례`;
+  banner.textContent = `${cur.name} 차례${onlineRoom ? (isMyTurn() ? ' · 내 차례' : ' · 관전') : ''}`;
   banner.style.borderColor = cur.color;
 }
 
@@ -634,7 +699,7 @@ function showMatchResult() {
   $('turnBanner').classList.add('hidden');
   togglePanel('result', true);
 }
-$('resultAgain').onclick = () => startMatch();
+$('resultAgain').onclick = () => onlineRoom ? network.send({ type: 'start' }) : startMatch();
 $('resultMenu').onclick = () => goMenu();
 
 // 좌석 표시: 멀티에서는 참가자 자리에 색깔 표시, 지금 던지는 사람 자리는 (카메라가 있으니) 숨김
@@ -687,6 +752,151 @@ $('continueOnHit').onchange = (e) => { matchCfg.continueOnHit = e.target.checked
 $('setupClose').onclick = () => togglePanel('setup', false);
 $('setupStart').onclick = () => startMatch();
 
+// ---------- 온라인 방 ----------
+const network = new RoomConnection(handleNetworkMessage, () => {
+  const wasInRoom = !!onlineRoom;
+  goMenu();
+  openOnline('join');
+  $('onlineStatus').textContent = wasInRoom ? '서버 연결이 끊겼습니다. 방에 다시 참가해주세요.' : '온라인 서버에 연결할 수 없습니다.';
+  $('onlineSubmit').disabled = false;
+});
+
+function settingsText(settings) {
+  return `${MAPS[settings.map].name} · ${BOTTLES[settings.bottle].name} · ${FLUIDS[settings.fluid].name} ${Math.round(settings.fill * 100)}% · ${MODES[settings.mode].name} ${settings.target}점`;
+}
+function openOnline(action) {
+  onlineAction = action;
+  hidePanels();
+  $('menu').classList.add('hidden');
+  $('onlineTitle').textContent = action === 'host' ? '온라인 방 만들기' : '온라인 방 참가';
+  $('onlineForm').classList.remove('hidden');
+  $('onlineLobby').classList.add('hidden');
+  $('codeField').classList.toggle('hidden', action === 'host');
+  $('hostInfo').textContent = action === 'host' ? `${settingsText({ ...opts, ...matchCfg })}. 이 방은 같은 병과 유체로 겨룹니다. 메뉴의 커스터마이즈와 한 PC 멀티 설정이 적용됩니다.` : '친구와 같은 서버 주소를 연 뒤 방 코드를 입력하세요.';
+  $('onlineSubmit').textContent = action === 'host' ? '방 만들기' : '참가';
+  $('onlineSubmit').disabled = false;
+  $('onlineStatus').textContent = '';
+  togglePanel('online', true);
+}
+function leaveOnline() {
+  network.close();
+  onlineRoom = null; onlineId = null; onlinePending = false; remoteSnapshot = null;
+  turnClock.stop();
+  $('resultAgain').disabled = false;
+  $('resultAgain').textContent = '다시 하기';
+  if (localSetup) {
+    Object.assign(opts, localSetup.opts); Object.assign(tuning, localSetup.tuning); Object.assign(look, localSetup.look);
+    localSetup = null;
+    rebuild();
+  }
+}
+$('onlineClose').onclick = () => { leaveOnline(); goMenu(); };
+$('onlineLeave').onclick = () => { leaveOnline(); goMenu(); };
+$('onlineStart').onclick = () => network.send({ type: 'start' });
+$('onlineSubmit').onclick = async () => {
+  const code = $('onlineCode').value.trim().toUpperCase();
+  if (onlineAction === 'join' && !/^[A-F0-9]{6}$/.test(code)) {
+    $('onlineStatus').textContent = '6자리 방 코드를 입력해주세요.'; return;
+  }
+  $('onlineSubmit').disabled = true;
+  $('onlineStatus').textContent = '연결 중…';
+  try {
+    await network.connect();
+    if ($('online').classList.contains('hidden')) return;
+    network.send({ type: onlineAction === 'host' ? 'create' : 'join', code,
+      name: $('onlineName').value, settings: { ...opts, mode: matchCfg.mode, target: matchCfg.target,
+        capDouble: matchCfg.capDouble, continueOnHit: matchCfg.continueOnHit } });
+  } catch (e) { $('onlineStatus').textContent = e.message; $('onlineSubmit').disabled = false; }
+};
+function handleNetworkMessage(msg) {
+  if (msg.type === 'welcome') { onlineId = msg.id; return; }
+  if (msg.type === 'error') {
+    onlinePending = false;
+    $('onlineSubmit').disabled = false;
+    $('onlineStatus').textContent = msg.message;
+    if (mode === 'play') showToast(msg.message, 'bad');
+    return;
+  }
+  if (msg.type === 'clock' && msg.turnId === onlineRoom?.turnId && onlineRoom.phase === 'ready') {
+    turnClock.deadline = performance.now() + msg.remaining;
+    return;
+  }
+  if (msg.type === 'launch' && msg.turnId === onlineRoom?.turnId) {
+    drag = null; charge = null; onlinePending = false;
+    turnClock.stop(); remoteSnapshot = null;
+    lastPower = msg.input.power;
+    sim.throw(msg.input);
+    setMeter(lastPower, lastPower);
+    $('last').textContent = '';
+    return;
+  }
+  if (msg.type === 'frame' && msg.turnId === onlineRoom?.turnId) {
+    remoteSnapshot = msg.snapshot;
+    sim.held = false; sim.state = msg.snapshot.state; sim.time = msg.time;
+    for (const ev of msg.events) if (ev.type === 'fizz') view.triggerFizz();
+    return;
+  }
+  if (msg.type !== 'room') return;
+  const previousRoom = onlineRoom;
+  if (!localSetup) localSetup = { opts: { ...opts }, tuning: { ...tuning }, look: { ...look } };
+  onlineRoom = msg;
+  $('onlineStatus').textContent = msg.notice || '';
+  $('onlineSubmit').disabled = false;
+  $('resultAgain').disabled = msg.hostId !== onlineId;
+  $('resultAgain').textContent = msg.hostId === onlineId ? '다시 하기' : '방장 시작 대기';
+  if (msg.phase === 'lobby') {
+    turnClock.stop(); remoteSnapshot = null; onlinePending = false;
+    game = 'practice'; match = null;
+    hidePanels(); setMode('menu'); resetThrow(); updateSeats();
+    $('menu').classList.add('hidden');
+    togglePanel('online', true);
+    $('onlineTitle').textContent = '온라인 대기실';
+    $('onlineForm').classList.add('hidden');
+    $('onlineLobby').classList.remove('hidden');
+    $('roomCode').textContent = msg.code;
+    $('roomSettings').textContent = settingsText(msg.settings);
+    $('roomPlayers').replaceChildren(...msg.members.map(m => {
+      const li = document.createElement('li');
+      li.textContent = `${m.name}${m.id === onlineId ? ' (나)' : ''}${m.id === msg.hostId ? ' · 방장' : ''}`;
+      return li;
+    }));
+    $('onlineStart').disabled = msg.hostId !== onlineId || msg.members.length < 2;
+    $('onlineStart').textContent = msg.hostId !== onlineId ? '방장이 시작하기를 기다리는 중' : msg.members.length < 2 ? '친구를 기다리는 중 (2명 이상)' : '게임 시작';
+    return;
+  }
+  const newTurn = !previousRoom?.match || previousRoom.turnId !== msg.turnId;
+  const firstStart = !previousRoom?.match;
+  match = msg.match; game = 'match';
+  if (newTurn) scheduleGuide();
+  hidePanels(); setMode('play'); lockMatchSettings(true);
+  $('practiceStats').classList.add('hidden'); $('scoreboard').classList.remove('hidden');
+  if (newTurn) {
+    drag = null; charge = null; remoteSnapshot = null; onlinePending = false;
+    sitAt(match.players[match.turn].seat);
+    if (firstStart) {
+      for (const key of ['bottle', 'fluid', 'fill', 'map']) opts[key] = msg.settings[key];
+      Object.assign(tuning, { spinBase: THROW.spinBase, spinRatio: THROW.spinRatio });
+      look.fluidColor = FLUIDS[opts.fluid].color;
+      rebuild();
+    }
+    resetThrow();
+    $('last').textContent = '';
+    showToast(isMyTurn() ? '내 차례 · 15초!' : `${match.players[match.turn].name} 차례`, 'ok');
+  }
+  if (msg.phase === 'ready') turnClock.deadline = performance.now() + msg.remaining;
+  else turnClock.stop();
+  if (msg.phase === 'result') {
+    drag = null; charge = null; onlinePending = false;
+    sim.state = 'done'; sim.held = false;
+    const r = msg.result;
+    const points = match.lastPoints;
+    $('last').textContent = r.outcome === 'timeout' ? '던지지 않아 0점 처리됐습니다.' : throwInfo(r);
+    showToast(r.outcome === 'timeout' ? '시간 초과 · 0점' : points ? `성공! +${points}` : r.outcome === 'offtable' ? '테이블 밖으로…' : '쓰러짐', points ? 'ok' : 'bad');
+  }
+  renderScoreboard(); updateSeats();
+  if (msg.phase === 'over') showMatchResult();
+}
+
 // ---------- 카메라 ----------
 // 1인칭: 내 자리(테이블 앞쪽 의자)에 앉은 눈높이
 const camPlay = { pos: new THREE.Vector3(0, EYE_Y, TABLE.halfZ + EYE_BACK), look: new THREE.Vector3(0, 0.8, 0.0) };
@@ -713,7 +923,7 @@ landMark.rotation.x = -Math.PI / 2;
 landMark.renderOrder = 10;
 scene.add(landMark);
 function updateArc() {
-  const show = mode === 'play' && sim.state === 'ready';
+  const show = canControl();
   arc.visible = show;
   landMark.visible = show;
   if (!show) return;
@@ -749,7 +959,7 @@ let last = performance.now();
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
   last = now;
-  const scaleT = prefs.slowmo && sim.state === 'flying' ? 0.35 : 1;
+  const scaleT = !onlineRoom && prefs.slowmo && sim.state === 'flying' ? 0.35 : 1;
   acc += real * scaleT;
 
   if (charge) {
@@ -757,16 +967,24 @@ function frame(now) {
     setMeter(p);
     hold(p);
   }
-  if (!prefs.showMeter && !charge) meter.style.opacity = 0;
-  else meter.style.opacity = 1;
+  meter.classList.toggle('hidden', game === 'match' || mode !== 'play');
+  meter.style.opacity = prefs.showMeter || charge ? 1 : 0;
 
   while (acc >= DT) {
-    sim.step();
+    if (!onlineRoom || onlineRoom.phase === 'lobby' || onlineRoom.phase === 'ready') sim.step();
     acc -= DT;
+  }
+  if (remoteSnapshot) {
+    // 서버의 20Hz 상태를 짧게 보간한다. 클라이언트는 착지/점수를 판정하지 않는다.
+    const t = Math.min(1, real * 22);
+    sim.x = sim.x.map((v, i) => v + (remoteSnapshot.com[i] - v) * t);
+    const q = new THREE.Quaternion(...sim.q).slerp(new THREE.Quaternion(...remoteSnapshot.q), t);
+    sim.q = q.toArray();
+    sim.p = remoteSnapshot.particles.map((p, i) => p.map((v, j) => (sim.p[i]?.[j] ?? v) + (v - (sim.p[i]?.[j] ?? v)) * t));
   }
   for (const ev of sim.events.splice(0)) if (ev.type === 'fizz') view.triggerFizz();
 
-  if (sim.state === 'done') {
+  if (sim.state === 'done' && !onlineRoom) {
     if (!resultShownAt) {
       resultShownAt = now;
       onResult(sim.result);
@@ -776,7 +994,7 @@ function frame(now) {
     }
   }
 
-  view.handVisible = mode === 'play' && sim.held;
+  view.handVisible = mode === 'play' && sim.held && isMyTurn();
   view.update(real);
   updateArc();
 

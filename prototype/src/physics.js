@@ -186,7 +186,13 @@ export class BottleSim {
     // 기울여 던질수록(낮고 빠른 궤적) 손목 스냅이 더 들어가 회전이 빨라진다.
     // 그래야 체공이 짧아도 한 바퀴를 돌 수 있다.
     const snap = 1 + c.angleSpin * Math.sin((angle * Math.PI) / 180);
-    const w = scale(axis, (c.spinBase + c.spinRatio * vUp) * snap);
+    // 무거운 껍데기는 같은 손목 동작에 덜 회전한다. 가득 찬 병은 물이
+    // 퍼질 여유가 적어 비행 중 감속도 작으므로 출발 스냅을 함께 낮춘다.
+    // 30% 페트병의 기존 손맛은 유지하는 게임플레이 보정 (실측 유체 모델 아님).
+    const shellLoad = Math.max(0, this.bottleCfg.shellMass / this.bottleCfg.scale ** 3 - 0.022);
+    const fullLoad = Math.max(0, (this.opts.fill - 0.4) / 0.6);
+    const wristResponse = 1 / (1 + 4 * shellLoad + 0.65 * fullLoad);
+    const w = scale(axis, (c.spinBase + c.spinRatio * vUp) * snap * wristResponse);
     this.held = false;
     // 시작 자세를 손에 들고 있던 상태와 무관하게 새로 만든다 (결정성):
     // 위쪽이 던지는 사람 쪽으로 startTilt 만큼 기운 병, 가라앉은 유체, 손 위치에서 출발.
