@@ -7,6 +7,12 @@
 
 ## 프로토타입 실행
 
+**설치 없이 바로 플레이**: 빌드한 웹 버전을 claude.ai 아티팩트로 올려두었다 (소유자만 열 수 있고, 공유 메뉴에서 공유 가능).
+
+**Windows에서 내 PC로 실행**: 저장소를 받은 뒤 `start.bat`을 더블클릭한다. Node.js가 없으면 winget으로 설치하고, 첫 실행 때 `npm install`을 한 뒤 브라우저를 연다.
+
+직접 실행하려면:
+
 ```bash
 cd prototype
 npm install
