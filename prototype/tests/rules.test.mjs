@@ -47,3 +47,14 @@ test('뚜껑 2점을 끄면 목표 2점은 두 번 성공해야 한다', () => {
   recordThrow(m, 'upright');
   assert.equal(m.winner, 0);
 });
+
+test('성공하면 한 번 더: 옵션을 켜면 성공한 사람이 계속 던진다', () => {
+  const m = createMatch({ players: players(2), mode: 'first', target: 3, continueOnHit: true });
+  recordThrow(m, 'upright');
+  assert.equal(advanceTurn(m), 0, '성공했으니 그대로 P1');
+  recordThrow(m, 'fallen');
+  assert.equal(advanceTurn(m), 1, '실패하면 다음 사람');
+  const off = createMatch({ players: players(2), mode: 'first', target: 3 });
+  recordThrow(off, 'upright');
+  assert.equal(advanceTurn(off), 1, '기본은 끔');
+});

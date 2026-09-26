@@ -24,6 +24,23 @@ test('같은 입력이면 결과가 완전히 같다 (결정성)', () => {
   assert.equal(run(), run());
 });
 
+test('손에 들고 흔든 이력과 상관없이 같은 던지기 인자면 같은 결과 (온라인 동기화)', () => {
+  const args = { power: 0.6, angle: 12, dir: [0.2, -0.98], start: [0.1, 0.95, 0.55], seed: 42 };
+  const a = new BottleSim({ fluid: 'soda', map: 'train' });
+  const b = new BottleSim({ fluid: 'soda', map: 'train' });
+  // b 만 손에 들고 이리저리 흔들고 시간이 흐른 상태
+  for (let i = 0; i < 300; i++) {
+    b.setHold(Math.sin(i / 20) * 0.2, 0.5, 0.2, (i % 40) / 2, [0, -1]);
+    b.step();
+  }
+  a.throw(args);
+  b.throw(args);
+  a.runToEnd();
+  b.runToEnd();
+  assert.equal(JSON.stringify(a.snapshot()), JSON.stringify(b.snapshot()));
+  assert.deepEqual(a.result, b.result);
+});
+
 test('세워둔 병은 가만히 서 있다', () => {
   for (const fluid of ['water', 'honey', 'soda', 'slime']) {
     const sim = new BottleSim({ fluid });

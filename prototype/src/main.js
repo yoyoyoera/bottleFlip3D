@@ -36,6 +36,7 @@ const matchCfg = {
   mode: 'first',
   target: 1,
   capDouble: true,
+  continueOnHit: false,
   names: ['플레이어 1', '플레이어 2', '플레이어 3', '플레이어 4'],
   ...saved.matchCfg,
 };
@@ -446,11 +447,9 @@ const setAngle = (deg) => {
   const a = Math.max(THROW.minAngle, Math.min(THROW.maxAngle, deg));
   if (a === aim.angle) return;
   aim.angle = a;
-  $('angle').textContent = `${a}°`;
   clearTimeout(guideTimer);
   guideTimer = setTimeout(() => { scheduleGuide(); persist(); }, 250);
 };
-$('angle').textContent = `${aim.angle}°`;
 canvas.addEventListener('wheel', (e) => {
   if (mode !== 'play') return;
   e.preventDefault();
@@ -491,7 +490,7 @@ const chargePower = () => {
 const isHit = (o) => o === 'upright' || o === 'cap';
 function throwInfo(r) {
   const pct = lastPower != null ? `파워 ${Math.round(lastPower * 100)}%` : '';
-  return `${pct} · ${aim.angle}° · ${r.rotations.toFixed(2)}회전 · 체공 ${r.airTime != null ? r.airTime.toFixed(2) : '-'}s`;
+  return `${pct} · ${r.rotations.toFixed(2)}회전 · 체공 ${r.airTime != null ? r.airTime.toFixed(2) : '-'}s`;
 }
 function onResult(r) {
   $('last').textContent = throwInfo(r);
@@ -566,6 +565,7 @@ function startMatch() {
     mode: matchCfg.mode,
     target: matchCfg.target,
     capDouble: matchCfg.capDouble,
+    continueOnHit: matchCfg.continueOnHit,
   });
   game = 'match';
   sitAt(match.players[0].seat);
@@ -663,6 +663,7 @@ function renderSetup() {
   $('setupModeDesc').textContent = MODES[matchCfg.mode].desc;
   $('targetVal').textContent = matchCfg.target;
   $('capDouble').checked = matchCfg.capDouble;
+  $('continueOnHit').checked = matchCfg.continueOnHit;
   const names = $('setupNames');
   names.innerHTML = '';
   for (let i = 0; i < matchCfg.count; i++) {
@@ -682,6 +683,7 @@ document.querySelectorAll('#setupMode button').forEach((b) => (b.onclick = () =>
 $('targetMinus').onclick = () => { matchCfg.target = Math.max(1, matchCfg.target - 1); persist(); renderSetup(); };
 $('targetPlus').onclick = () => { matchCfg.target = Math.min(5, matchCfg.target + 1); persist(); renderSetup(); };
 $('capDouble').onchange = (e) => { matchCfg.capDouble = e.target.checked; persist(); };
+$('continueOnHit').onchange = (e) => { matchCfg.continueOnHit = e.target.checked; persist(); };
 $('setupClose').onclick = () => togglePanel('setup', false);
 $('setupStart').onclick = () => startMatch();
 
