@@ -65,9 +65,8 @@ export class BottleSim {
     this.state = 'ready'; // ready → flying → done
     this.result = null;
     this.held = true;
-    // 손 위치(x, z)는 유지하고 테이블 위에 다시 세운다
-    const [hx, , hz] = this.holdPos ?? [0, 0, this.throwCfg.startZ];
-    this.holdPos = [hx, TABLE.y + 0.0005, hz];
+    // 손 위치는 유지한다 (손에 든 채로 다시 시작)
+    this.holdPos = this.holdPos ?? [0, TABLE.y + 0.0005, this.throwCfg.startZ];
     this.holdQuat = [0, 0, 0, 1];
     // 병 위치 = 질량중심 월드 좌표
     this.x = add(this.holdPos, this.com);
@@ -179,12 +178,12 @@ export class BottleSim {
     // 시작 자세: 위쪽이 던지는 사람 쪽으로 정확히 startTilt 만큼 기운 상태 (결과가 결정적이도록)
     const want = quatFromAxisAngle(axis, (c.startTilt * Math.PI) / 180);
     this.rotateRigid(quatMul(want, [-this.q[0], -this.q[1], -this.q[2], this.q[3]]));
-    // 손이 병을 들어 올린 상태에서 놓는다 (바닥이 테이블을 긁으며 출발하지 않도록)
-    const lift = TABLE.y + LAUNCH_LIFT - this.bottomWorld()[1];
-    if (lift > 0) {
-      this.x[1] += lift;
-      for (const p of this.p) p[1] += lift;
-    }
+    // 손 위치에서 정확히 출발한다 (결과가 결정적이도록 따라가던 오차는 무시).
+    // 테이블에 너무 가까우면 바닥이 테이블을 긁으며 출발하므로 최소 높이를 둔다.
+    const start = [this.holdPos[0], Math.max(this.holdPos[1], TABLE.y + LAUNCH_LIFT), this.holdPos[2]];
+    const shift = sub(start, this.bottomWorld());
+    this.x = add(this.x, shift);
+    this.p = this.p.map((p) => add(p, shift));
     // 병+유체 전체의 질량중심을 기준으로 강체 회전을 준다.
     // (병 껍데기 중심 기준으로 돌리면 바닥의 물이 뒤로 튀어 전체가 뒤로 간다)
     const cm = this.systemCom();

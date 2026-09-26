@@ -65,6 +65,7 @@ function rebuild() {
   sim = new BottleSim({ ...opts, tuning: { spinBase: tuning.spinBase, spinRatio: tuning.spinRatio } });
   view.dispose();
   view.build(sim, look);
+  hold(0);
   resultShownAt = 0;
   scheduleGuide();
   persist();
@@ -86,6 +87,7 @@ function scheduleGuide() {
     const t0 = performance.now();
     while (p <= THROW.maxPower + 1e-9 && performance.now() - t0 < 12) {
       probe.reset();
+      probe.setHold(0, HAND_Z, handLift(p));
       probe.throw({ power: p, angle: aim.angle });
       const r = probe.runToEnd();
       results.push({ p, ok: r && (r.outcome === 'upright' || r.outcome === 'cap') });
@@ -197,6 +199,7 @@ const setMode = (m) => {
   mode = m;
   $('menu').classList.toggle('hidden', m !== 'menu');
   $('hud').classList.toggle('hidden', m !== 'play');
+  if (sim?.state === 'ready') hold(0);
 };
 const togglePanel = (id, show) => $(id).classList.toggle('hidden', !show);
 document.querySelectorAll('#menu button').forEach((b) => {
@@ -236,8 +239,11 @@ updateStats();
 let drag = null;
 let charge = null;
 let lastPower = null;
-const hand = { x: 0, z: THROW.startZ }; // 병을 쥔 손의 테이블 위 위치
-const HAND_X = TABLE.halfX - 0.1;
+// 병을 쥔 손: 내 눈앞, 테이블 앞쪽 가장자리 위에 들고 있다. 커서 좌우로 x만 움직인다.
+const HAND_Z = 0.42;
+const HAND_LIFT = 0.2; // 테이블 위 손 높이 (병 바닥 기준, m)
+const HAND_X = 0.3;
+const hand = { x: 0, z: HAND_Z };
 const EYE = new THREE.Vector3(0, 1.2, 0.9); // 1인칭 눈 위치 (내 의자)
 // 던지는 방향 = 내 눈에서 병을 바라본 수평 방향 → 테이블 기준으로는 사선 던지기
 const throwDir = () => {
@@ -247,11 +253,12 @@ const throwDir = () => {
   return [dx / l, dz / l];
 };
 // 손에 든 병 자세: 힘을 모을수록 들리고, 위쪽이 내 쪽으로 기운다 (던지기 준비 동작)
+const handLift = (power) => HAND_LIFT + (power / THROW.maxPower) * DRAG_LIFT;
 const hold = (power = 0) => {
-  const k = power / THROW.maxPower;
-  sim.setHold(hand.x, hand.z, k * DRAG_LIFT, THROW.startTilt * Math.min(1, power / 0.3), throwDir());
+  // 메뉴에서는 테이블 위에 세워두고, 플레이 중에는 손에 든다
+  if (mode !== 'play') return sim.setHold(0, THROW.startZ, 0);
+  sim.setHold(hand.x, hand.z, handLift(power), THROW.startTilt * Math.min(1, power / 0.3), throwDir());
 };
-const HAND_Z = [0.05, TABLE.halfZ - 0.06];
 
 const raycaster = new THREE.Raycaster();
 // 커서 → 테이블 위치 변환은 고정된 기준 카메라로 한다.
@@ -263,15 +270,14 @@ addEventListener('resize', () => {
   refCam.aspect = innerWidth / innerHeight;
   refCam.updateProjectionMatrix();
 });
-const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -TABLE.y);
-// 커서가 가리키는 테이블 위 지점 → 손 위치
+const handPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -HAND_Z);
+// 커서 좌우 → 손 좌우 위치 (손이 있는 세로 평면과 만나는 점)
 function aimHand(e) {
   const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, refCam);
-  const hit = raycaster.ray.intersectPlane(tablePlane, new THREE.Vector3());
+  const hit = raycaster.ray.intersectPlane(handPlane, new THREE.Vector3());
   if (!hit) return;
   hand.x = Math.max(-HAND_X, Math.min(HAND_X, hit.x));
-  hand.z = Math.max(HAND_Z[0], Math.min(HAND_Z[1], hit.z));
 }
 
 function resetThrow() {
@@ -433,9 +439,11 @@ function updateArc() {
   const fwd = vUp * Math.tan((aim.angle * Math.PI) / 180);
   const [dx, dz] = throwDir();
   const g = MAPS[opts.map].gravity;
-  const T = (2 * vUp) / g;
+  // 손 높이에서 출발해 테이블 높이로 돌아올 때까지
+  const h = handLift(power);
+  const T = (vUp + Math.sqrt(vUp * vUp + 2 * g * h)) / g;
   const pos = arcGeo.attributes.position;
-  const y0 = TABLE.y + 0.005;
+  const y0 = TABLE.y + 0.005 + h;
   for (let i = 0; i < ARC_N; i++) {
     const t = (i / (ARC_N - 1)) * T;
     pos.setXYZ(i, hand.x + dx * fwd * t, y0 + vUp * t - 0.5 * g * t * t, hand.z + dz * fwd * t);
@@ -479,6 +487,7 @@ function frame(now) {
     } else if (now - resultShownAt > 1700) resetThrow();
   }
 
+  view.handVisible = mode === 'play' && sim.held;
   view.update(real);
   updateArc();
 

@@ -49,6 +49,44 @@ function makeLabelTexture(kind, color) {
   return tex;
 }
 
+// 오른손이 병 몸통을 감싸 쥔 모양 (병 로컬 좌표, +z = 던지는 사람 쪽).
+// 손등과 팔은 내 쪽, 손가락은 병 너머로 감긴다.
+function makeHand(sh) {
+  const skin = new THREE.MeshStandardMaterial({ color: 0xe2b08a, roughness: 0.65 });
+  const g = new THREE.Group();
+  const R = sh.radius;
+  const gripY = sh.shoulderY * 0.55;
+  // 손바닥/손등: 병 오른쪽 뒤편을 덮는 둥근 판
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), skin);
+  palm.scale.set(0.022, 0.045, 0.036);
+  palm.position.set(R * 0.75, gripY, R * 0.55);
+  palm.rotation.y = Math.PI / 4;
+  g.add(palm);
+  // 네 손가락: 병 앞쪽(-z)을 감싸는 호
+  for (let i = 0; i < 4; i++) {
+    const y = gripY + 0.024 - i * 0.016;
+    const r = R + 0.006;
+    const len = (i === 0 || i === 3 ? 0.85 : 1) * Math.PI * 0.85;
+    const arc = new THREE.Mesh(new THREE.TorusGeometry(r, 0.0068 - i * 0.0005, 8, 20, len), skin);
+    arc.rotation.x = Math.PI / 2;
+    arc.rotation.z = -Math.PI * 0.05; // 오른쪽에서 시작해 앞쪽으로 감긴다
+    arc.position.y = y;
+    g.add(arc);
+  }
+  // 엄지: 병 왼쪽 앞으로
+  const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.0075, 0.03, 4, 10), skin);
+  thumb.position.set(-R * 0.35, gripY + 0.02, R + 0.004);
+  thumb.rotation.set(0.2, 0, Math.PI / 2.6);
+  g.add(thumb);
+  // 팔목과 팔: 내 쪽 아래로 빠진다
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.03, 0.34, 16), skin);
+  arm.position.set(R * 1.4 + 0.07, gripY - 0.07, R + 0.15);
+  arm.rotation.set(-1.0, 0, 0.55);
+  g.add(arm);
+  g.traverse((o) => (o.castShadow = true));
+  return g;
+}
+
 export class BottleView {
   constructor(scene) {
     this.scene = scene;
@@ -142,6 +180,10 @@ export class BottleView {
       }
     }
 
+    // 1인칭 손 (병을 쥐고 있을 때만 보인다)
+    this.hand = makeHand(sh);
+    this.root.add(this.hand);
+
     // 착지 거품 링 (탄산)
     this.foamMesh = new THREE.Mesh(
       new THREE.CircleGeometry(sh.rIn * 0.95, 24),
@@ -168,6 +210,7 @@ export class BottleView {
     this.root.position.set(...snap.bottom);
     this.root.quaternion.set(...snap.q);
     this.root.updateMatrixWorld();
+    if (this.hand) this.hand.visible = !!this.handVisible;
 
     if (!this.liquid) return;
     const sh = this.shape;
