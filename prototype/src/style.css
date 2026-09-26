@@ -1,0 +1,59 @@
+:root {
+  --panel: rgba(18, 22, 30, 0.82);
+  --text: #f3f6fb;
+  --muted: #a9b3c4;
+  --accent: #4fa8ff;
+  --ok: #56d98a;
+  --bad: #ff6b6b;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1117; color: var(--text); font-family: system-ui, -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; }
+canvas#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.hidden { display: none !important; }
+button { font: inherit; color: var(--text); background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+button:hover:not(:disabled) { background: rgba(255,255,255,0.16); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 700; }
+
+.menu { position: fixed; left: 6vw; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 10px; width: min(300px, 80vw); }
+.menu h1 { font-size: 40px; margin: 0 0 18px; letter-spacing: -1px; text-shadow: 0 2px 16px rgba(0,0,0,0.35); }
+.menu h1 span { color: var(--accent); }
+.menu button { text-align: left; padding: 14px 18px; font-size: 18px; background: var(--panel); backdrop-filter: blur(6px); }
+.menu button.primary { background: var(--accent); }
+.menu small { display: block; font-size: 12px; color: var(--muted); }
+.menu .ver { color: var(--muted); font-size: 12px; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+
+.panel { position: fixed; right: 16px; top: 16px; width: min(300px, calc(100vw - 32px)); background: var(--panel); backdrop-filter: blur(8px); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; font-size: 14px; max-height: calc(100vh - 32px); overflow: auto; z-index: 5; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; }
+.panel label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+.panel label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+.panel select, .panel input[type=range] { width: 100%; }
+.panel select { background: #1d2430; color: var(--text); border: 1px solid #333c4a; border-radius: 8px; padding: 6px; }
+.panel input[type=color] { width: 100%; height: 30px; border: none; background: none; padding: 0; }
+.panel .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.panel .info { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
+button.icon { padding: 2px 8px; }
+
+.hud .stats { position: fixed; left: 16px; top: 16px; display: flex; gap: 8px; }
+.hud .stats div { background: var(--panel); border-radius: 10px; padding: 6px 12px; min-width: 64px; }
+.hud .stats small { display: block; color: var(--muted); font-size: 11px; }
+.hud .stats b { font-size: 22px; }
+.hud-buttons { position: fixed; left: 16px; top: 76px; display: flex; gap: 6px; }
+.hud-buttons button { background: var(--panel); font-size: 13px; padding: 6px 10px; }
+.hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: var(--panel); padding: 8px 14px; border-radius: 20px; font-size: 13px; color: var(--muted); white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; }
+.hint b { color: var(--text); }
+.toast { position: fixed; top: 22%; left: 50%; transform: translate(-50%, -50%) scale(0.8); font-size: 44px; font-weight: 800; opacity: 0; transition: opacity 0.15s, transform 0.2s; text-shadow: 0 3px 20px rgba(0,0,0,0.5); pointer-events: none; white-space: nowrap; }
+.toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.toast.ok { color: var(--ok); }
+.toast.bad { color: var(--bad); }
+.toast.gold { color: #ffd36e; }
+.last { position: fixed; top: calc(22% + 36px); left: 50%; transform: translateX(-50%); font-size: 14px; color: var(--text); opacity: 0.85; text-shadow: 0 1px 6px rgba(0,0,0,0.7); white-space: nowrap; }
+.meter { position: fixed; right: 24px; bottom: 60px; width: 16px; height: 180px; background: rgba(0,0,0,0.35); border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.25); }
+#meterFill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: linear-gradient(to top, #4fa8ff, #ffd36e, #ff6b6b); }
+#meterMark { position: absolute; left: -4px; right: -4px; height: 2px; background: #fff; bottom: 0; opacity: 0; }
+
+@media (max-width: 640px) {
+  .menu h1 { font-size: 30px; }
+  .toast { font-size: 32px; }
+  .hint { font-size: 11px; }
+}
