@@ -12,12 +12,55 @@
     <!-- 메인 메뉴: 왼쪽 메뉴, 오른쪽에 내 물병 -->
     <div id="menu" class="menu">
       <h1>Bottle Flip <span>3D</span></h1>
-      <button data-act="practice" class="primary">연습 (Practice)</button>
-      <button data-act="join" disabled>Join <small>코드 입력 · 준비 중</small></button>
-      <button data-act="host" disabled>Host <small>방 만들기 · 준비 중</small></button>
+      <button data-act="practice" class="primary">연습 <small>혼자 무한으로 던지기</small></button>
+      <button data-act="local">멀티 (한 PC) <small>2~4명이 번갈아 던지기</small></button>
+      <button data-act="join" disabled>Join <small>코드 입력 · 온라인 준비 중</small></button>
+      <button data-act="host" disabled>Host <small>방 만들기 · 온라인 준비 중</small></button>
       <button data-act="customize">Customize</button>
       <button data-act="settings">Settings</button>
       <p class="ver">던지기 손맛 프로토타입 v0.1</p>
+    </div>
+
+    <!-- 멀티 설정 -->
+    <div id="setup" class="panel setup hidden">
+      <div class="panel-head">
+        <b>멀티 (한 PC)</b>
+        <button id="setupClose" class="icon">✕</button>
+      </div>
+      <div class="field">
+        <span class="lbl">인원</span>
+        <div class="seg" id="setupCount">
+          <button data-n="2">2명</button><button data-n="3">3명</button><button data-n="4">4명</button>
+        </div>
+      </div>
+      <div id="setupNames" class="names"></div>
+      <div class="field">
+        <span class="lbl">모드</span>
+        <div class="seg" id="setupMode">
+          <button data-mode="first">먼저 성공</button><button data-mode="last">꼴등 가리기</button>
+        </div>
+        <p id="setupModeDesc" class="info"></p>
+      </div>
+      <div class="field">
+        <span class="lbl">목표 점수 <small>(이만큼 얻으면 성공)</small></span>
+        <div class="stepper">
+          <button id="targetMinus" aria-label="목표 점수 줄이기">−</button>
+          <b id="targetVal">1</b>
+          <button id="targetPlus" aria-label="목표 점수 늘리기">+</button>
+        </div>
+      </div>
+      <label class="check"><input id="capDouble" type="checkbox" checked /> 뚜껑 착지는 2점</label>
+      <button id="setupStart" class="primary">시작</button>
+    </div>
+
+    <!-- 멀티 결과 -->
+    <div id="result" class="panel result hidden">
+      <h2 id="resultTitle"></h2>
+      <ol id="resultList"></ol>
+      <div class="row">
+        <button id="resultAgain" class="primary">다시 하기</button>
+        <button id="resultMenu">메뉴</button>
+      </div>
     </div>
 
     <!-- 커스터마이즈 / 맵 -->
@@ -57,11 +100,15 @@
 
     <!-- 인게임 HUD -->
     <div id="hud" class="hud hidden">
-      <div class="stats">
+      <div class="stats" id="practiceStats">
         <div><small>성공</small><b id="sOk">0</b>/<span id="sAll">0</span></div>
+        <div><small>성공률</small><b id="sRate">-</b></div>
         <div><small>연속</small><b id="sStreak">0</b></div>
-        <div><small>최고</small><b id="sBest">0</b></div>
+        <div><small>최고 연속</small><b id="sBest">0</b></div>
+        <div><small>뚜껑</small><b id="sCaps">0</b></div>
       </div>
+      <div class="scoreboard hidden" id="scoreboard"></div>
+      <div class="turn-banner hidden" id="turnBanner"></div>
       <div class="hud-buttons">
         <button id="btnCustom">커스터마이즈</button>
         <button id="btnSettings">설정</button>

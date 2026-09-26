@@ -3,14 +3,14 @@
 
 import { BottleSim } from './physics.js';
 
-// req: { simOpts, z, angle, liftBase, dragLift, maxPower, step }
+// req: { simOpts, x, z, dir, angle, liftBase, dragLift, maxPower, step }  (x, z, dir 는 월드 좌표)
 export function computeGuide(req) {
   const probe = new BottleSim(req.simOpts);
   const results = [];
   for (let p = 0; p <= req.maxPower + 1e-9; p += req.step) {
     probe.reset();
-    probe.setHold(0, req.z, req.liftBase + (p / req.maxPower) * req.dragLift);
-    probe.throw({ power: p, angle: req.angle });
+    probe.setHold(req.x, req.z, req.liftBase + (p / req.maxPower) * req.dragLift, 0, req.dir);
+    probe.throw({ power: p, angle: req.angle, dir: req.dir });
     const r = probe.runToEnd();
     results.push({ p, ok: !!r && (r.outcome === 'upright' || r.outcome === 'cap') });
   }

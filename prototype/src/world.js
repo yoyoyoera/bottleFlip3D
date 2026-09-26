@@ -51,7 +51,8 @@ export function buildWorld(scene, mapId) {
     [TABLE.halfX + 0.35, 0, -Math.PI / 2],
     [-TABLE.halfX - 0.35, 0, Math.PI / 2],
   ];
-  seats.forEach(([x, z, ry], i) => {
+  const ghosts = [];
+  seats.forEach(([x, z, ry]) => {
     const chair = new THREE.Group();
     const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 0.42), chairMat);
     seat.position.y = 0.45;
@@ -61,15 +62,15 @@ export function buildWorld(scene, mapId) {
     chair.position.set(x, 0, z);
     chair.rotation.y = ry;
     chair.traverse((o) => (o.castShadow = true));
-    if (i > 0) {
-      // 다른 플레이어 자리 표시 (빈 자리)
-      const ghost = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.16, 0.35, 4, 12),
-        new THREE.MeshStandardMaterial({ color: [0xff7a7a, 0x7ad0ff, 0xffd36e][i - 1], transparent: true, opacity: 0.35 }),
-      );
-      ghost.position.set(0, 0.85, 0.05);
-      chair.add(ghost);
-    }
+    // 자리에 앉은 사람 표시 (반투명 캡슐). 누가 앉는지는 main 에서 정한다.
+    const ghost = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.16, 0.35, 4, 12),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 }),
+    );
+    ghost.position.set(0, 0.85, 0.05);
+    ghost.visible = false;
+    chair.add(ghost);
+    ghosts.push(ghost);
     g.add(chair);
   });
 
@@ -153,5 +154,6 @@ export function buildWorld(scene, mapId) {
   g.add(hemi, sun);
 
   scene.add(g);
+  g.userData.seatGhosts = ghosts; // 좌석 순서: +z(나), -z(맞은편), +x, -x
   return g;
 }

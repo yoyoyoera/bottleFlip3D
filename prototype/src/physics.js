@@ -144,12 +144,19 @@ export class BottleSim {
     return normalize(cross([dir[0], 0, dir[1]], [0, 1, 0]));
   }
 
+  // 손에 든 병의 자세: 로컬 +z(손/라벨 앞면)가 던지는 사람 쪽을 보게 돌린 뒤 tilt 만큼 기울인다
+  static holdQuat(dir, tiltDeg) {
+    const yaw = quatFromAxisAngle([0, 1, 0], Math.atan2(-dir[0], -dir[1]));
+    const tilt = quatFromAxisAngle(BottleSim.spinAxis(dir), (tiltDeg * Math.PI) / 180);
+    return quatMul(tilt, yaw);
+  }
+
   // 손에 든 병을 (x, z) 위치, 테이블 위 lift 높이로 옮긴다. 움직이면 물이 출렁인다.
   // tilt: 병 위쪽을 던지는 사람 쪽으로 기울인 각도(도)
   setHold(x, z, lift = 0, tilt = 0, dir = [0, -1]) {
     if (!this.held) return;
     this.holdPos = [x, TABLE.y + 0.0005 + lift, z];
-    this.holdQuat = quatFromAxisAngle(BottleSim.spinAxis(dir), (tilt * Math.PI) / 180);
+    this.holdQuat = BottleSim.holdQuat(dir, tilt);
   }
 
   // 병과 유체를 바닥 중심을 축으로 통째로 돌린다
@@ -179,7 +186,7 @@ export class BottleSim {
     const w = scale(axis, (c.spinBase + c.spinRatio * vUp) * snap);
     this.held = false;
     // 시작 자세: 위쪽이 던지는 사람 쪽으로 정확히 startTilt 만큼 기운 상태 (결과가 결정적이도록)
-    const want = quatFromAxisAngle(axis, (c.startTilt * Math.PI) / 180);
+    const want = BottleSim.holdQuat(dir, c.startTilt);
     this.rotateRigid(quatMul(want, [-this.q[0], -this.q[1], -this.q[2], this.q[3]]));
     // 손 위치에서 정확히 출발한다 (결과가 결정적이도록 따라가던 오차는 무시).
     // 테이블에 너무 가까우면 바닥이 테이블을 긁으며 출발하므로 최소 높이를 둔다.

@@ -4,6 +4,7 @@ import { BOTTLES, FLUIDS, MAPS, TABLE, THROW } from './config.js';
 import { BottleView, LABELS } from './bottleView.js';
 import { buildWorld } from './world.js';
 import { computeGuide } from './guide.js';
+import { MODES, createMatch, recordThrow, advanceTurn, ranking } from './rules.js';
 
 // ---------- 저장 (브라우저별 편의 기능, 실패해도 동작) ----------
 const STORE_KEY = 'bottleflip3d.v1';
@@ -27,9 +28,18 @@ const opts = { map: 'forest', bottle: 'standard', fluid: 'water', fill: 0.3, ...
 const look = { fluidColor: FLUIDS[opts.fluid].color, capColor: '#e84a5f', label: 'stripe', labelColor: '#2d6cdf', ...saved.look };
 const tuning = { dragRef: THROW.dragRef, spinBase: THROW.spinBase, spinRatio: THROW.spinRatio, ...saved.tuning };
 const aim = { angle: saved.angle ?? THROW.angle };
-const stats = { ok: 0, all: 0, streak: 0, best: saved.best || 0 };
+const stats = { ok: 0, all: 0, streak: 0, caps: 0, best: saved.best || 0 };
 const prefs = { showMeter: true, slowmo: false, ...saved.prefs };
-const persist = () => save({ opts, look, tuning, best: stats.best, prefs, angle: aim.angle });
+const PLAYER_COLORS = ['#4fa8ff', '#ff7a7a', '#56d98a', '#ffd36e'];
+const matchCfg = {
+  count: 2,
+  mode: 'first',
+  target: 1,
+  capDouble: true,
+  names: ['플레이어 1', '플레이어 2', '플레이어 3', '플레이어 4'],
+  ...saved.matchCfg,
+};
+const persist = () => save({ opts, look, tuning, best: stats.best, prefs, angle: aim.angle, matchCfg });
 
 // ---------- 렌더러 ----------
 const canvas = document.getElementById('view');
@@ -55,6 +65,7 @@ let worldMap = null;
 const view = new BottleView(scene);
 let sim = null;
 let resultShownAt = 0;
+let afterPending = false; // 결과 후 다음 단계로 한 번만 넘어가게
 let guide = null; // 성공 파워 구간 (결정적 시뮬로 미리 계산)
 
 function rebuild() {
@@ -62,6 +73,7 @@ function rebuild() {
     if (world) scene.remove(world);
     world = buildWorld(scene, opts.map);
     worldMap = opts.map;
+    updateSeats();
   }
   sim = new BottleSim({ ...opts, tuning: { spinBase: tuning.spinBase, spinRatio: tuning.spinRatio } });
   view.dispose();
@@ -75,7 +87,7 @@ function rebuild() {
 // ---------- 성공 구간 가이드 ----------
 // 같은 입력이면 같은 결과가 나오므로 파워별 결과를 미리 돌려볼 수 있다.
 let guideJob = 0;
-let guideZ = 0;
+const guidePos = { x: 0, z: 0 };
 let guideSoonTimer = 0;
 const scheduleGuideSoon = () => {
   clearTimeout(guideSoonTimer);
@@ -97,11 +109,15 @@ function scheduleGuide() {
   const job = ++guideJob;
   guide = null;
   drawGuide();
-  // 손 앞뒤 위치에 따라 테이블 안에 떨어지는지가 달라지므로 현재 손 위치로 계산
-  guideZ = hand.z;
+  // 손 위치/방향에 따라 테이블 안에 떨어지는지가 달라지므로 현재 손 위치로 계산
+  guidePos.x = hand.x;
+  guidePos.z = hand.z;
+  const [wx, wz] = handWorld();
   const req = {
     simOpts: { ...opts, tuning: { spinBase: tuning.spinBase, spinRatio: tuning.spinRatio } },
-    z: hand.z,
+    x: wx,
+    z: wz,
+    dir: throwDir(),
     angle: aim.angle,
     liftBase: HAND_LIFT,
     dragLift: DRAG_LIFT,
@@ -219,7 +235,8 @@ const togglePanel = (id, show) => $(id).classList.toggle('hidden', !show);
 document.querySelectorAll('#menu button').forEach((b) => {
   b.onclick = () => {
     const act = b.dataset.act;
-    if (act === 'practice') { setMode('play'); togglePanel('panel', false); togglePanel('settings', false); }
+    if (act === 'practice') startPractice();
+    if (act === 'local') openSetup();
     if (act === 'customize') { togglePanel('settings', false); togglePanel('panel', true); }
     if (act === 'settings') { togglePanel('panel', false); togglePanel('settings', true); }
   };
@@ -228,7 +245,7 @@ $('panelClose').onclick = () => togglePanel('panel', false);
 $('settingsClose').onclick = () => togglePanel('settings', false);
 $('btnCustom').onclick = () => { togglePanel('settings', false); togglePanel('panel', $('panel').classList.contains('hidden')); };
 $('btnSettings').onclick = () => { togglePanel('panel', false); togglePanel('settings', $('settings').classList.contains('hidden')); };
-$('btnMenu').onclick = () => { setMode('menu'); resetThrow(); };
+$('btnMenu').onclick = () => goMenu();
 
 const toast = $('toast');
 let toastTimer = 0;
@@ -241,8 +258,10 @@ const showToast = (text, cls) => {
 const updateStats = () => {
   $('sOk').textContent = stats.ok;
   $('sAll').textContent = stats.all;
+  $('sRate').textContent = stats.all ? `${Math.round((stats.ok / stats.all) * 100)}%` : '-';
   $('sStreak').textContent = stats.streak;
   $('sBest').textContent = stats.best;
+  $('sCaps').textContent = stats.caps;
 };
 updateStats();
 
@@ -253,46 +272,85 @@ updateStats();
 let drag = null;
 let charge = null;
 let lastPower = null;
-// 병을 쥔 손: 내 눈앞, 테이블 앞쪽 가장자리 위에 들고 있다.
+// ---------- 좌석 ----------
+// 테이블 네 자리. 각 자리의 '로컬 좌표'는 내가 +z 쪽에 앉아 -z(테이블 가운데)를 보는 기준이다.
+// yaw 로 돌려서 월드 좌표가 된다. depth = 내 앞 테이블 가장자리까지 거리, width = 좌우 반폭.
+const SEATS = [
+  { yaw: 0, depth: TABLE.halfZ, width: TABLE.halfX }, // 0: 앞 (+z)
+  { yaw: Math.PI, depth: TABLE.halfZ, width: TABLE.halfX }, // 1: 맞은편 (-z)
+  { yaw: Math.PI / 2, depth: TABLE.halfX, width: TABLE.halfZ }, // 2: 오른쪽 (+x)
+  { yaw: -Math.PI / 2, depth: TABLE.halfX, width: TABLE.halfZ }, // 3: 왼쪽 (-x)
+];
+let seatIdx = 0;
+const seat = () => SEATS[seatIdx];
+// 로컬 (lx, lz) → 월드 [x, z]
+const toWorld = (lx, lz) => {
+  const { yaw } = seat();
+  const c = Math.cos(yaw);
+  const sn = Math.sin(yaw);
+  return [lx * c + lz * sn, -lx * sn + lz * c];
+};
+
+// ---------- 손 ----------
+// 병을 쥔 손: 내 눈앞, 테이블 앞쪽 가장자리 위에 들고 있다. (좌석 로컬 좌표)
 // 커서 좌우 → 손 좌우, (누르지 않은 상태의) 커서 상하 → 손 앞뒤 (위 = 멀리, 아래 = 가까이)
-const HAND_Z = 0.56;
-const HAND_Z_FAR = 0.3;
-const HAND_Z_NEAR = 0.66;
+const HAND_Z_OFF = 0.06; // 기본: 테이블 가장자리보다 6cm 내 쪽
+const HAND_Z_FAR_OFF = -0.2;
+const HAND_Z_NEAR_OFF = 0.16;
 const HAND_LIFT = 0.2; // 테이블 위 손 높이 (병 바닥 기준, m)
 const HAND_X = 0.3;
-const hand = { x: 0, z: HAND_Z };
-const EYE = new THREE.Vector3(0, 1.2, 0.9); // 1인칭 눈 위치 (내 의자)
+const EYE_Y = 1.2;
+const EYE_BACK = 0.4; // 눈은 테이블 가장자리에서 40cm 뒤
+const hand = { x: 0, z: TABLE.halfZ + HAND_Z_OFF };
+const eyeLocalZ = () => seat().depth + EYE_BACK;
+const eyeWorld = () => {
+  const [x, z] = toWorld(0, eyeLocalZ());
+  return new THREE.Vector3(x, EYE_Y, z);
+};
+const handWorld = () => toWorld(hand.x, hand.z);
 // 던지는 방향 = 내 눈에서 병을 바라본 수평 방향 → 테이블 기준으로는 사선 던지기
 const throwDir = () => {
-  const dx = hand.x - EYE.x;
-  const dz = hand.z - EYE.z;
+  const dx = hand.x;
+  const dz = hand.z - eyeLocalZ();
   const l = Math.hypot(dx, dz) || 1;
-  return [dx / l, dz / l];
+  const [wx, wz] = toWorld(dx / l, dz / l);
+  return [wx, wz];
 };
 // 손에 든 병 자세: 힘을 모을수록 들리고, 위쪽이 내 쪽으로 기운다 (던지기 준비 동작)
 const handLift = (power) => HAND_LIFT + (power / THROW.maxPower) * DRAG_LIFT;
 const hold = (power = 0) => {
   // 메뉴에서는 테이블 위에 세워두고, 플레이 중에는 손에 든다
-  if (mode !== 'play') return sim.setHold(0, THROW.startZ, 0);
-  sim.setHold(hand.x, hand.z, handLift(power), THROW.startTilt * Math.min(1, power / 0.3), throwDir());
+  if (mode === 'menu') return sim.setHold(0, THROW.startZ, 0);
+  const [x, z] = handWorld();
+  sim.setHold(x, z, handLift(power), THROW.startTilt * Math.min(1, power / 0.3), throwDir());
+};
+// 자리를 옮기면 손을 그 자리 기본 위치로
+const sitAt = (i) => {
+  seatIdx = i;
+  hand.x = 0;
+  hand.z = seat().depth + HAND_Z_OFF;
+  refCam.position.set(0, EYE_Y, eyeLocalZ());
+  refCam.lookAt(0, 0.8, 0);
+  zAnchor = null;
+  if (sim) scheduleGuideSoon();
 };
 
 const raycaster = new THREE.Raycaster();
-// 커서 → 테이블 위치 변환은 고정된 기준 카메라로 한다.
+// 커서 → 손 위치 변환은 좌석 로컬 좌표의 고정된 기준 카메라로 한다.
 // (실제 카메라는 커서를 따라 고개를 돌리므로, 그걸 쓰면 병 위치가 되먹임으로 흔들린다)
 const refCam = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.01, 60);
-refCam.position.copy(EYE);
+refCam.position.set(0, EYE_Y, TABLE.halfZ + EYE_BACK);
 refCam.lookAt(0, 0.8, 0);
 addEventListener('resize', () => {
   refCam.aspect = innerWidth / innerHeight;
   refCam.updateProjectionMatrix();
 });
-const handPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -HAND_Z);
+const handPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -hand.z);
 // 커서 상하 → 손 앞뒤. 절대 위치로 매핑하되, 힘 모으기(위로 끌기)가 끝나면 기준점을 다시 잡아서
 // 놓은 직후 손이 멀리 튀지 않게 한다.
 const zFromY = (y) => {
   const t = Math.max(0, Math.min(1, (y / innerHeight - 0.25) / 0.6));
-  return HAND_Z_FAR + t * (HAND_Z_NEAR - HAND_Z_FAR);
+  return seat().depth + HAND_Z_FAR_OFF + t * (HAND_Z_NEAR_OFF - HAND_Z_FAR_OFF);
 };
 let zAnchor = null; // null = 다음 이동에서 현재 손 위치 기준으로 다시 잡기
 let zOffset = 0;
@@ -301,10 +359,10 @@ function aimHandZ(e) {
     zOffset = hand.z - zFromY(e.clientY);
     zAnchor = true;
   }
-  hand.z = Math.max(HAND_Z_FAR, Math.min(HAND_Z_NEAR, zFromY(e.clientY) + zOffset));
+  const d = seat().depth;
+  hand.z = Math.max(d + HAND_Z_FAR_OFF, Math.min(d + HAND_Z_NEAR_OFF, zFromY(e.clientY) + zOffset));
   // 한계에 닿으면 기준점을 끌고 가서, 반대로 움직이면 바로 반응하게
   zOffset = hand.z - zFromY(e.clientY);
-  if (Math.abs(hand.z - guideZ) > 0.03) scheduleGuideSoon();
 }
 // 커서 좌우 → 손 좌우 위치 (손이 있는 세로 평면과 만나는 점)
 function aimHand(e) {
@@ -314,6 +372,8 @@ function aimHand(e) {
   const hit = raycaster.ray.intersectPlane(handPlane, new THREE.Vector3());
   if (!hit) return;
   hand.x = Math.max(-HAND_X, Math.min(HAND_X, hit.x));
+  // 손 위치가 바뀌면 (특히 사선/가장자리) 테이블 안에 떨어지는지가 달라진다
+  if (Math.hypot(hand.x - guidePos.x, hand.z - guidePos.z) > 0.03) scheduleGuideSoon();
 }
 
 function resetThrow() {
@@ -322,6 +382,7 @@ function resetThrow() {
   sim.reset();
   hold(0);
   resultShownAt = 0;
+  afterPending = false;
   meterMark.style.opacity = 0;
   setMeter(0);
 }
@@ -407,7 +468,8 @@ addEventListener('keydown', (e) => {
     meterMark.style.opacity = 0;
     e.preventDefault();
   }
-  if (e.code === 'KeyR') resetThrow();
+  // 멀티에서는 던진 뒤 다시 던지기 방지 (손에 들고 있을 때만)
+  if (e.code === 'KeyR' && (game === 'practice' || sim.state === 'ready')) resetThrow();
   if (e.code === 'Escape') cancelDrag();
   if (e.code === 'ArrowUp') setAngle(aim.angle + 1);
   if (e.code === 'ArrowDown') setAngle(aim.angle - 1);
@@ -426,28 +488,206 @@ const chargePower = () => {
 };
 
 // ---------- 결과 처리 ----------
-function onResult(r) {
-  stats.all++;
+const isHit = (o) => o === 'upright' || o === 'cap';
+function throwInfo(r) {
   const pct = lastPower != null ? `파워 ${Math.round(lastPower * 100)}%` : '';
-  const info = `${pct} · ${r.rotations.toFixed(2)}회전 · 체공 ${r.airTime != null ? r.airTime.toFixed(2) : '-'}s`;
-  if (r.outcome === 'upright' || r.outcome === 'cap') {
+  return `${pct} · ${aim.angle}° · ${r.rotations.toFixed(2)}회전 · 체공 ${r.airTime != null ? r.airTime.toFixed(2) : '-'}s`;
+}
+function onResult(r) {
+  $('last').textContent = throwInfo(r);
+  if (game === 'match') return onMatchResult(r);
+  stats.all++;
+  if (isHit(r.outcome)) {
     stats.ok++;
     stats.streak++;
     stats.best = Math.max(stats.best, stats.streak);
-    if (r.outcome === 'cap') showToast('뚜껑 착지!!', 'gold');
-    else showToast(stats.streak >= 3 ? `성공! ${stats.streak}연속` : '성공!', 'ok');
+    if (r.outcome === 'cap') {
+      stats.caps++;
+      showToast('뚜껑 착지!!', 'gold');
+    } else showToast(stats.streak >= 3 ? `성공! ${stats.streak}연속` : '성공!', 'ok');
   } else {
     stats.streak = 0;
     showToast(r.outcome === 'offtable' ? '테이블 밖으로…' : '쓰러짐', 'bad');
   }
-  $('last').textContent = info;
   updateStats();
   persist();
 }
 
+// 결과를 보여준 뒤 (약 1.7초) 다음으로
+function afterResult() {
+  if (game === 'practice') return resetThrow();
+  if (match.over) return showMatchResult();
+  const i = advanceTurn(match);
+  sitAt(match.players[i].seat);
+  resetThrow();
+  updateSeats();
+  renderScoreboard();
+  showToast(`${match.players[i].name} 차례`, 'ok');
+}
+
+// ---------- 게임 모드 ----------
+let game = 'practice'; // 'practice' | 'match'
+let match = null;
+const SEAT_ORDER = { 2: [0, 1], 3: [0, 2, 1], 4: [0, 2, 1, 3] }; // 테이블을 도는 순서
+
+function hidePanels() {
+  for (const id of ['panel', 'settings', 'setup', 'result']) togglePanel(id, false);
+}
+function goMenu() {
+  hidePanels();
+  game = 'practice';
+  match = null;
+  sitAt(0);
+  setMode('menu');
+  resetThrow();
+  updateSeats();
+}
+function startPractice() {
+  hidePanels();
+  game = 'practice';
+  match = null;
+  sitAt(0);
+  $('practiceStats').classList.remove('hidden');
+  $('scoreboard').classList.add('hidden');
+  $('turnBanner').classList.add('hidden');
+  setMode('play');
+  resetThrow();
+  updateSeats();
+}
+function startMatch() {
+  hidePanels();
+  const n = matchCfg.count;
+  match = createMatch({
+    players: SEAT_ORDER[n].map((seatNo, i) => ({
+      name: matchCfg.names[i].trim() || `플레이어 ${i + 1}`,
+      color: PLAYER_COLORS[i],
+      seat: seatNo,
+    })),
+    mode: matchCfg.mode,
+    target: matchCfg.target,
+    capDouble: matchCfg.capDouble,
+  });
+  game = 'match';
+  sitAt(match.players[0].seat);
+  $('practiceStats').classList.add('hidden');
+  $('scoreboard').classList.remove('hidden');
+  $('last').textContent = '';
+  setMode('play');
+  resetThrow();
+  updateSeats();
+  renderScoreboard();
+  showToast(`${match.players[0].name} 차례`, 'ok');
+}
+
+function onMatchResult(r) {
+  const p = match.players[match.turn];
+  const res = recordThrow(match, r.outcome);
+  if (r.outcome === 'cap') showToast(`뚜껑 착지!! +${res.points}`, 'gold');
+  else if (res.points) showToast(`성공! +${res.points}`, 'ok');
+  else showToast(r.outcome === 'offtable' ? '테이블 밖으로…' : '쓰러짐', 'bad');
+  if (res.finished && !res.over) {
+    setTimeout(() => showToast(`${p.name} 통과! ${p.place}등`, 'gold'), 800);
+  }
+  renderScoreboard();
+}
+
+function renderScoreboard() {
+  if (!match) return;
+  const el = $('scoreboard');
+  el.innerHTML = '';
+  match.players.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = `p${i === match.turn && !match.over ? ' now' : ''}${p.done ? ' done' : ''}`;
+    const status = p.done ? `통과 · ${p.place}등 (관전)` : i === match.turn ? '던지는 중' : `${p.throws}번 던짐`;
+    row.innerHTML = `<span class="dot"></span><span class="nm"></span><span class="st"></span><span class="sc"></span>`;
+    row.querySelector('.dot').style.background = p.color;
+    row.querySelector('.nm').textContent = p.name;
+    row.querySelector('.st').textContent = status;
+    row.querySelector('.sc').textContent = `${p.score}/${match.target}`;
+    el.appendChild(row);
+  });
+  const banner = $('turnBanner');
+  const cur = match.players[match.turn];
+  banner.classList.toggle('hidden', match.over);
+  banner.textContent = `${cur.name} 차례`;
+  banner.style.borderColor = cur.color;
+}
+
+function showMatchResult() {
+  if (!$('result').classList.contains('hidden')) return;
+  const order = ranking(match);
+  const title = match.mode === 'first'
+    ? `${match.players[match.winner].name} 승리!`
+    : `꼴등: ${match.players[match.loser].name}`;
+  $('resultTitle').textContent = title;
+  const list = $('resultList');
+  list.innerHTML = '';
+  order.forEach((i, rank) => {
+    const p = match.players[i];
+    const li = document.createElement('li');
+    const rate = p.throws ? Math.round((p.hits / p.throws) * 100) : 0;
+    li.textContent = `${p.name} · ${p.score}점 · ${p.throws}번 던짐 (성공률 ${rate}%${p.caps ? `, 뚜껑 ${p.caps}` : ''})`;
+    if (match.mode === 'first' && rank === 0) li.className = 'win';
+    if (match.mode === 'last' && i === match.loser) li.className = 'loser';
+    list.appendChild(li);
+  });
+  $('turnBanner').classList.add('hidden');
+  togglePanel('result', true);
+}
+$('resultAgain').onclick = () => startMatch();
+$('resultMenu').onclick = () => goMenu();
+
+// 좌석 표시: 멀티에서는 참가자 자리에 색깔 표시, 지금 던지는 사람 자리는 (카메라가 있으니) 숨김
+function updateSeats() {
+  const ghosts = world?.userData.seatGhosts;
+  if (!ghosts) return;
+  ghosts.forEach((g) => (g.visible = false));
+  if (mode !== 'play' || game !== 'match' || !match) return;
+  match.players.forEach((p, i) => {
+    const g = ghosts[p.seat];
+    g.visible = i !== match.turn || match.over;
+    g.material.color.set(p.color);
+    g.material.opacity = p.done ? 0.15 : 0.45;
+  });
+}
+
+// ---------- 멀티 설정 창 ----------
+function openSetup() {
+  hidePanels();
+  renderSetup();
+  togglePanel('setup', true);
+}
+function renderSetup() {
+  document.querySelectorAll('#setupCount button').forEach((b) => b.classList.toggle('on', +b.dataset.n === matchCfg.count));
+  document.querySelectorAll('#setupMode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === matchCfg.mode));
+  $('setupModeDesc').textContent = MODES[matchCfg.mode].desc;
+  $('targetVal').textContent = matchCfg.target;
+  $('capDouble').checked = matchCfg.capDouble;
+  const names = $('setupNames');
+  names.innerHTML = '';
+  for (let i = 0; i < matchCfg.count; i++) {
+    const row = document.createElement('label');
+    row.className = 'pl';
+    row.innerHTML = `<span class="dot"></span><input id="pname${i}" maxlength="12" />`;
+    row.querySelector('.dot').style.background = PLAYER_COLORS[i];
+    const input = row.querySelector('input');
+    input.value = matchCfg.names[i];
+    input.setAttribute('aria-label', `플레이어 ${i + 1} 이름`);
+    input.oninput = () => { matchCfg.names[i] = input.value; persist(); };
+    names.appendChild(row);
+  }
+}
+document.querySelectorAll('#setupCount button').forEach((b) => (b.onclick = () => { matchCfg.count = +b.dataset.n; persist(); renderSetup(); }));
+document.querySelectorAll('#setupMode button').forEach((b) => (b.onclick = () => { matchCfg.mode = b.dataset.mode; persist(); renderSetup(); }));
+$('targetMinus').onclick = () => { matchCfg.target = Math.max(1, matchCfg.target - 1); persist(); renderSetup(); };
+$('targetPlus').onclick = () => { matchCfg.target = Math.min(5, matchCfg.target + 1); persist(); renderSetup(); };
+$('capDouble').onchange = (e) => { matchCfg.capDouble = e.target.checked; persist(); };
+$('setupClose').onclick = () => togglePanel('setup', false);
+$('setupStart').onclick = () => startMatch();
+
 // ---------- 카메라 ----------
 // 1인칭: 내 자리(테이블 앞쪽 의자)에 앉은 눈높이
-const camPlay = { pos: EYE.clone(), look: new THREE.Vector3(0, 0.8, 0.0) };
+const camPlay = { pos: new THREE.Vector3(0, EYE_Y, TABLE.halfZ + EYE_BACK), look: new THREE.Vector3(0, 0.8, 0.0) };
 const LOOK_Y = 0.93; // 시선 높이: 높을수록 손에 든 병이 화면 아래로 내려간다
 const LOOK_FOLLOW = 0.8; // 커서 좌우를 따라 고개를 돌리는 정도 (0 = 고정, 1 = 병을 정면으로)
 const camMenu = { pos: new THREE.Vector3(-0.2, 0.9, 0.68), look: new THREE.Vector3(-0.17, 0.85, 0.3) };
@@ -481,6 +721,7 @@ function updateArc() {
   const vUp = THROW.minUp + THROW.upPerPower * power;
   const fwd = vUp * Math.tan((aim.angle * Math.PI) / 180);
   const [dx, dz] = throwDir();
+  const [hx, hz] = handWorld();
   const g = MAPS[opts.map].gravity;
   // 손 높이에서 출발해 테이블 높이로 돌아올 때까지
   const h = handLift(power);
@@ -489,10 +730,10 @@ function updateArc() {
   const y0 = TABLE.y + 0.005 + h;
   for (let i = 0; i < ARC_N; i++) {
     const t = (i / (ARC_N - 1)) * T;
-    pos.setXYZ(i, hand.x + dx * fwd * t, y0 + vUp * t - 0.5 * g * t * t, hand.z + dz * fwd * t);
+    pos.setXYZ(i, hx + dx * fwd * t, y0 + vUp * t - 0.5 * g * t * t, hz + dz * fwd * t);
   }
   pos.needsUpdate = true;
-  landMark.position.set(hand.x + dx * fwd * T, TABLE.y + 0.002, hand.z + dz * fwd * T);
+  landMark.position.set(hx + dx * fwd * T, TABLE.y + 0.002, hz + dz * fwd * T);
   landMark.material.opacity = arc.material.opacity;
   arcGeo.computeBoundingSphere();
   arc.computeLineDistances();
@@ -527,7 +768,10 @@ function frame(now) {
     if (!resultShownAt) {
       resultShownAt = now;
       onResult(sim.result);
-    } else if (now - resultShownAt > 1700) resetThrow();
+    } else if (now - resultShownAt > 1700 && !afterPending) {
+      afterPending = true;
+      afterResult();
+    }
   }
 
   view.handVisible = mode === 'play' && sim.held;
@@ -537,7 +781,11 @@ function frame(now) {
   // 카메라 (기차는 흔들림 반영)
   const target = mode === 'menu' ? camMenu : camPlay;
   // 1인칭: 병(손)이 있는 쪽으로 고개를 돌린다
-  if (mode === 'play') camPlay.look.set(hand.x * LOOK_FOLLOW, LOOK_Y, 0);
+  if (mode === 'play') {
+    camPlay.pos.copy(eyeWorld());
+    const [lx, lz] = toWorld(hand.x * LOOK_FOLLOW, 0);
+    camPlay.look.set(lx, LOOK_Y, lz);
+  }
   const k = 1 - Math.exp(-real * 4);
   // 병이 높이 뜨면 고개를 들어 따라본다 (몸은 그대로)
   const lift = mode === 'play' ? Math.max(0, sim.x[1] - 0.95) : 0;
@@ -554,4 +802,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // 디버그/자동 테스트용
-window.__bottleflip = { get sim() { return sim; }, doThrow, resetThrow, setMode, setAngle, opts, hand, get guide() { return guide; } };
+window.__bottleflip = { get sim() { return sim; }, get match() { return match; }, doThrow, resetThrow, setMode, setAngle, startMatch, matchCfg, opts, hand, get guide() { return guide; } };

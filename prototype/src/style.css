@@ -34,11 +34,11 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .panel .info { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0; }
 button.icon { padding: 2px 8px; }
 
-.hud .stats { position: fixed; left: 16px; top: 16px; display: flex; gap: 8px; }
+.hud .stats { position: fixed; left: 16px; top: 16px; display: flex; flex-wrap: wrap; gap: 8px; max-width: calc(100vw - 32px); }
 .hud .stats div { background: var(--panel); border-radius: 10px; padding: 6px 12px; min-width: 64px; }
 .hud .stats small { display: block; color: var(--muted); font-size: 11px; }
 .hud .stats b { font-size: 22px; }
-.hud-buttons { position: fixed; left: 16px; top: 76px; display: flex; gap: 6px; }
+.hud-buttons { position: fixed; right: 16px; top: 16px; display: flex; gap: 6px; }
 .hud-buttons button { background: var(--panel); font-size: 13px; padding: 6px 10px; }
 .hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: var(--panel); padding: 8px 14px; border-radius: 20px; font-size: 13px; color: var(--muted); white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; }
 .hint b { color: var(--text); }
@@ -60,3 +60,33 @@ button.icon { padding: 2px 8px; }
   .toast { font-size: 32px; }
   .hint { font-size: 11px; }
 }
+
+/* 멀티 설정 / 결과 */
+.setup, .result { left: 50%; right: auto; top: 50%; transform: translate(-50%, -50%); width: min(360px, calc(100vw - 32px)); z-index: 8; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.lbl { color: var(--muted); }
+.lbl small { font-size: 11px; }
+.seg { display: flex; gap: 6px; }
+.seg button { flex: 1; }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 700; }
+.names { display: grid; gap: 6px; }
+.names .pl { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.names input { flex: 1; min-width: 0; background: #1d2430; color: var(--text); border: 1px solid #333c4a; border-radius: 8px; padding: 6px 8px; font: inherit; }
+.dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.stepper { display: flex; align-items: center; gap: 12px; }
+.stepper b { font-size: 22px; min-width: 24px; text-align: center; font-variant-numeric: tabular-nums; }
+.result h2 { margin: 0; font-size: 22px; text-wrap: balance; }
+.result ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; font-variant-numeric: tabular-nums; }
+.result li.loser { color: var(--bad); font-weight: 700; }
+.result li.win { color: #ffd36e; font-weight: 700; }
+.result .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* 멀티 HUD */
+.scoreboard { position: fixed; left: 16px; top: 16px; display: grid; gap: 6px; min-width: 190px; }
+.scoreboard .p { display: flex; align-items: center; gap: 8px; background: var(--panel); border-radius: 10px; padding: 6px 10px; font-size: 14px; border: 2px solid transparent; }
+.scoreboard .p.now { border-color: var(--accent); }
+.scoreboard .p.done { opacity: 0.55; }
+.scoreboard .p .nm { flex: 1; }
+.scoreboard .p .sc { font-variant-numeric: tabular-nums; font-weight: 700; }
+.scoreboard .p .st { font-size: 11px; color: var(--muted); }
+.turn-banner { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: var(--panel); padding: 8px 18px; border-radius: 20px; font-size: 18px; font-weight: 700; white-space: nowrap; border: 2px solid var(--accent); }
