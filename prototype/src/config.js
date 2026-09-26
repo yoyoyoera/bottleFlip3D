@@ -42,7 +42,7 @@ export const THROW = {
   maxPower: 1.5,
   minUp: 1.2, // power 0 일 때 위 속도
   upPerPower: 1.8, // power 1 당 추가 위 속도
-  angle: 6, // 기본 던지기 각도(도). 앞으로 나가는 속도 = 위 속도 * tan(각도)
+  angle: 10, // 기본 던지기 각도(도). 앞으로 나가는 속도 = 위 속도 * tan(각도)
   minAngle: 0,
   maxAngle: 20, // 이보다 크면 테이블 밖으로 나간다
   startTilt: 20, // 던지기 직전 병 위쪽이 나를 향해 기운 각도(도)

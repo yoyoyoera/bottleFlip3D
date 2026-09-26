@@ -74,10 +74,19 @@ function rebuild() {
 // ---------- 성공 구간 가이드 ----------
 // 같은 입력이면 같은 결과가 나오므로 파워별 결과를 미리 돌려볼 수 있다.
 let guideJob = 0;
+let guideZ = 0;
+let guideSoonTimer = 0;
+const scheduleGuideSoon = () => {
+  clearTimeout(guideSoonTimer);
+  guideSoonTimer = setTimeout(scheduleGuide, 300);
+};
 function scheduleGuide() {
   const job = ++guideJob;
   guide = null;
   drawGuide();
+  // 손 앞뒤 위치에 따라 테이블 안에 떨어지는지가 달라지므로 현재 손 위치로 계산
+  const zForGuide = hand.z;
+  guideZ = zForGuide;
   const probe = new BottleSim({ ...opts, tuning: { spinBase: tuning.spinBase, spinRatio: tuning.spinRatio } });
   const results = [];
   const step = 0.05;
@@ -87,7 +96,7 @@ function scheduleGuide() {
     const t0 = performance.now();
     while (p <= THROW.maxPower + 1e-9 && performance.now() - t0 < 12) {
       probe.reset();
-      probe.setHold(0, HAND_Z, handLift(p));
+      probe.setHold(0, zForGuide, handLift(p));
       probe.throw({ power: p, angle: aim.angle });
       const r = probe.runToEnd();
       results.push({ p, ok: r && (r.outcome === 'upright' || r.outcome === 'cap') });
@@ -239,8 +248,11 @@ updateStats();
 let drag = null;
 let charge = null;
 let lastPower = null;
-// 병을 쥔 손: 내 눈앞, 테이블 앞쪽 가장자리 위에 들고 있다. 커서 좌우로 x만 움직인다.
-const HAND_Z = 0.42;
+// 병을 쥔 손: 내 눈앞, 테이블 앞쪽 가장자리 위에 들고 있다.
+// 커서 좌우 → 손 좌우, (누르지 않은 상태의) 커서 상하 → 손 앞뒤 (위 = 멀리, 아래 = 가까이)
+const HAND_Z = 0.56;
+const HAND_Z_FAR = 0.3;
+const HAND_Z_NEAR = 0.66;
 const HAND_LIFT = 0.2; // 테이블 위 손 높이 (병 바닥 기준, m)
 const HAND_X = 0.3;
 const hand = { x: 0, z: HAND_Z };
@@ -271,8 +283,27 @@ addEventListener('resize', () => {
   refCam.updateProjectionMatrix();
 });
 const handPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -HAND_Z);
+// 커서 상하 → 손 앞뒤. 절대 위치로 매핑하되, 힘 모으기(위로 끌기)가 끝나면 기준점을 다시 잡아서
+// 놓은 직후 손이 멀리 튀지 않게 한다.
+const zFromY = (y) => {
+  const t = Math.max(0, Math.min(1, (y / innerHeight - 0.25) / 0.6));
+  return HAND_Z_FAR + t * (HAND_Z_NEAR - HAND_Z_FAR);
+};
+let zAnchor = null; // null = 다음 이동에서 현재 손 위치 기준으로 다시 잡기
+let zOffset = 0;
+function aimHandZ(e) {
+  if (zAnchor === null) {
+    zOffset = hand.z - zFromY(e.clientY);
+    zAnchor = true;
+  }
+  hand.z = Math.max(HAND_Z_FAR, Math.min(HAND_Z_NEAR, zFromY(e.clientY) + zOffset));
+  // 한계에 닿으면 기준점을 끌고 가서, 반대로 움직이면 바로 반응하게
+  zOffset = hand.z - zFromY(e.clientY);
+  if (Math.abs(hand.z - guideZ) > 0.03) scheduleGuideSoon();
+}
 // 커서 좌우 → 손 좌우 위치 (손이 있는 세로 평면과 만나는 점)
 function aimHand(e) {
+  handPlane.constant = -hand.z;
   const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, refCam);
   const hit = raycaster.ray.intersectPlane(handPlane, new THREE.Vector3());
@@ -304,6 +335,7 @@ const DRAG_LIFT = 0.05; // 힘을 모을수록 병을 이만큼까지 들어 올
 canvas.addEventListener('pointermove', (e) => {
   if (mode !== 'play' || sim.state !== 'ready') return;
   if (!drag) {
+    aimHandZ(e);
     aimHand(e);
     hold(0);
     return;
@@ -316,7 +348,6 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerdown', (e) => {
   if (mode !== 'play' || sim.state !== 'ready' || e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
-  aimHand(e);
   drag = { startY: e.clientY, power: 0 };
   meterMark.style.opacity = 0;
 });
@@ -324,6 +355,7 @@ const endDrag = () => {
   if (!drag) return;
   const p = drag.power;
   drag = null;
+  zAnchor = null;
   if (p < 0.05) {
     // 거의 안 끌었으면 던지지 않고 내려놓기
     hold(0);
@@ -336,6 +368,7 @@ canvas.addEventListener('pointerup', endDrag);
 const cancelDrag = () => {
   if (!drag) return;
   drag = null;
+  zAnchor = null;
   hold(0);
   setMeter(0);
 };
